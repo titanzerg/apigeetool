@@ -80,17 +80,35 @@ func main() {
 			host = "https://apigee.googleapis.com"
 		}
 
+		downloadPath := strings.TrimSpace(*downloadDir)
+		if downloadPath == "" {
+			downloadPath = "downloaded-proxy-endpoints"
+		}
+
+		if err := os.RemoveAll(downloadPath); err != nil {
+			log.Fatalf("cleanup download directory: %v", err)
+		}
+		if err := os.MkdirAll(downloadPath, 0o755); err != nil {
+			log.Fatalf("create download directory: %v", err)
+		}
+
 		opts := apigee.DownloadOptions{
 			Host:      host,
 			Org:       org,
 			Proxy:     proxy,
 			Token:     token,
 			Revision:  *revision,
-			OutputDir: strings.TrimSpace(*downloadDir),
+			OutputDir: downloadPath,
 		}
 
 		if err := apigee.DownloadProxyEndpoints(opts); err != nil {
 			log.Fatalf("download ProxyEndpoint XML: %v", err)
+		}
+
+		if matchPath, score, err := apigee.FindClosestProxyEndpoint(*outputPath, downloadPath); err != nil {
+			log.Printf("warning: unable to find closest ProxyEndpoint: %v", err)
+		} else {
+			fmt.Printf("Closest downloaded ProxyEndpoint: %s (%.1f%% similarity)\n", matchPath, score*100)
 		}
 	}
 }

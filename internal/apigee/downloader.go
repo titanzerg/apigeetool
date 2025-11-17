@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -258,4 +259,110 @@ func proxyEndpointPrefix(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// FindClosestProxyEndpoint finds the downloaded ProxyEndpoint XML that is most similar to the generated file.
+func FindClosestProxyEndpoint(generatedPath, dir string) (string, float64, error) {
+	generatedPath = strings.TrimSpace(generatedPath)
+	if generatedPath == "" {
+		return "", 0, fmt.Errorf("generated ProxyEndpoint path is empty")
+	}
+
+	baseData, err := os.ReadFile(generatedPath)
+	if err != nil {
+		return "", 0, fmt.Errorf("read generated ProxyEndpoint: %w", err)
+	}
+
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		dir = "."
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		return "", 0, fmt.Errorf("stat download dir: %w", err)
+	}
+	if !info.IsDir() {
+		return "", 0, fmt.Errorf("download path is not a directory: %s", dir)
+	}
+
+	var bestFile string
+	var bestScore float64
+
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.ToLower(filepath.Ext(path)) != ".xml" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		score := similarityScore(string(baseData), string(data))
+		if score > bestScore {
+			bestScore = score
+			bestFile = path
+		}
+		return nil
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if bestFile == "" {
+		return "", 0, fmt.Errorf("no XML files found in %s", dir)
+	}
+	return bestFile, bestScore, nil
+}
+
+func similarityScore(a, b string) float64 {
+	linesA := normalizedLines(a)
+	linesB := normalizedLines(b)
+	if len(linesA) == 0 && len(linesB) == 0 {
+		return 1
+	}
+
+	countA := make(map[string]int, len(linesA))
+	for _, line := range linesA {
+		countA[line]++
+	}
+
+	countB := make(map[string]int, len(linesB))
+	for _, line := range linesB {
+		countB[line]++
+	}
+
+	var matches int
+	for line, aCount := range countA {
+		if bCount := countB[line]; bCount > 0 {
+			if aCount < bCount {
+				matches += aCount
+			} else {
+				matches += bCount
+			}
+		}
+	}
+
+	total := len(linesA) + len(linesB)
+	if total == 0 {
+		return 0
+	}
+	return float64(2*matches) / float64(total)
+}
+
+func normalizedLines(content string) []string {
+	raw := strings.Split(content, "\n")
+	lines := make([]string, 0, len(raw))
+	for _, line := range raw {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
