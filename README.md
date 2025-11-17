@@ -8,6 +8,7 @@
 - สร้าง `<Flow>` ให้ครบทุก path + method พร้อม condition `(proxy.pathsuffix MatchesPath …)`
 - กำหนดค่า `<ProxyEndpoint name>`, `<BasePath>` และไฟล์ output เองได้
 - รักษา order ของ path/method ตามที่เขียนในไฟล์ YAML เพื่อให้ diff อ่านง่าย
+- สามารถดึง ProxyEndpoint XML จาก Apigee (ผ่าน Management API) ลงมาเก็บในโฟลเดอร์ท้องถิ่นได้เลย
 
 ## โครงสร้างสำคัญใน repo
 
@@ -47,6 +48,17 @@ go run . \
 
 เมื่อรันสำเร็จ CLI จะขึ้นข้อความ `Generated <จำนวน flows> flows at <path>`. เราสามารถเปิดไฟล์ปลายทางไปเทียบกับ `newproxy.xml` ได้เพื่อเช็กว่าโครงสร้างถูกต้องตามที่ต้องการ
 
+### Flag สำหรับเชื่อมต่อ Apigee (ดาวน์โหลด ProxyEndpoint)
+
+| Flag | คำอธิบาย |
+| --- | --- |
+| `-proxy` | ชื่อ API Proxy บน Apigee ที่ต้องการดาวน์โหลด ProxyEndpoint ทั้งหมด |
+| `-org` | ชื่อ organization (ถ้าไม่ใส่ จะอ่านจาก env `APIGEE_ORG`) |
+| `-token` | Bearer token เพื่อเรียก Management API (ถ้าไม่ใส่ จะอ่านจาก env `APIGEE_TOKEN`) |
+| `-revision` | ระบุ revision เฉพาะ (ถ้าไม่ใส่จะไปดึง revision ล่าสุดให้อัตโนมัติ) |
+| `-apigee-host` | base URL ของ Apigee Management API (default `https://apigee.googleapis.com`) |
+| `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints`) |
+
 ## ตัวอย่างการใช้งาน
 
 สร้างไฟล์ใหม่ชื่อ `newproxy.xml` จาก spec เริ่มต้น:
@@ -57,8 +69,20 @@ go run . -input openapi.yaml -output newproxy.xml
 
 ถ้าอยากทดสอบเฉพาะบาง path ให้ลบ path อื่นออกจาก `openapi.yaml` แล้วรันคำสั่งเดิมอีกครั้ง
 
+ดาวน์โหลด ProxyEndpoint XML ทุกไฟล์ของ proxy `my-proxy` (อิง revision ล่าสุด):
+
+```bash
+export APIGEE_ORG=my-org
+export APIGEE_TOKEN="$(gcloud auth print-access-token)"
+go run . -proxy my-proxy -download-dir apigee-proxy-endpoints
+```
+
+คำสั่งจะดึง zip bundle ของ proxy revision ที่ใหม่ที่สุด, แตกเฉพาะไฟล์ใน `apiproxy/proxy-endpoints/` แล้วเซฟลงในโฟลเดอร์ที่กำหนด (สร้างให้อัตโนมัติถ้ายังไม่มี)
+
 ## เคล็ดลับ & การดีบัก
 
+- หากเรียก `-proxy` แล้วขึ้น error ว่า “token required” ให้ตรวจสอบ env `APIGEE_TOKEN` หรือส่ง `-token` เป็น Bearer token เอง (สามารถใช้ `gcloud auth print-access-token` ได้ถ้าเป็น Apigee X ที่เชื่อมกับ Google Cloud)
+- หากเจอ error 403/404 ตอนดาวน์โหลด ให้เช็กว่า proxy name, org, และสิทธิ์ของ token ถูกต้อง รวมถึงตรวจสอบว่า proxy นั้นมี revision แล้วจริงๆ
 - หาก CLI แจ้งว่า “no paths defined” ให้ตรวจสอบว่าไฟล์ YAML มีส่วน `paths:` และจัด indent ถูกต้อง
 - ถ้าต้องการรักษา order ของ path/method ให้แก้ไฟล์ `openapi.yaml` ด้วยเครื่องมือที่ไม่สลับลำดับ key (เช่น VS Code + YAML extension)
 - คำอธิบายของแต่ละ flow จะใช้ `summary` ถ้ามี, ถ้าไม่มีจะถอยไปใช้ `description` หรือสร้างจาก `<METHOD> <Path>` ให้อัตโนมัติ
