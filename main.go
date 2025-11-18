@@ -9,6 +9,9 @@ import (
 
 	"Apigee/internal/apigee"
 	"Apigee/internal/openapi"
+	"Apigee/internal/proxyxml"
+	"Apigee/internal/report"
+	"Apigee/internal/update"
 )
 
 func main() {
@@ -105,10 +108,42 @@ func main() {
 			log.Fatalf("download ProxyEndpoint XML: %v", err)
 		}
 
-		if matchPath, score, err := apigee.FindClosestProxyEndpoint(*outputPath, downloadPath); err != nil {
+		matchPath, score, err := apigee.FindClosestProxyEndpoint(*outputPath, downloadPath)
+		if err != nil {
 			log.Printf("warning: unable to find closest ProxyEndpoint: %v", err)
+			return
+		}
+
+		fmt.Printf("Closest downloaded ProxyEndpoint: %s (%.1f%% similarity)\n", matchPath, score*100)
+
+		genFlows, err := proxyxml.ParseFlowsFromFile(*outputPath)
+		if err != nil {
+			log.Printf("warning: parse generated ProxyEndpoint flows: %v", err)
+			return
+		}
+		existingFlows, err := proxyxml.ParseFlowsFromFile(matchPath)
+		if err != nil {
+			log.Printf("warning: parse downloaded ProxyEndpoint flows: %v", err)
+			return
+		}
+		diff := proxyxml.DiffFlows(genFlows, existingFlows)
+		if !report.PrintFlowDiff(diff) {
+			return
+		}
+
+		ok, err := update.ConfirmApply()
+		if err != nil {
+			log.Printf("warning: confirm apply failed: %v", err)
+			return
+		}
+		if ok {
+			if err := update.ReplaceProxyEndpoint(*outputPath, matchPath); err != nil {
+				log.Printf("warning: failed to update %s: %v", matchPath, err)
+			} else {
+				fmt.Printf("Updated %s with generated ProxyEndpoint content.\n", matchPath)
+			}
 		} else {
-			fmt.Printf("Closest downloaded ProxyEndpoint: %s (%.1f%% similarity)\n", matchPath, score*100)
+			fmt.Println("Skipped updating downloaded ProxyEndpoint.")
 		}
 	}
 }

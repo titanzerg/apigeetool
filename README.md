@@ -8,7 +8,7 @@
 - สร้าง `<Flow>` ให้ครบทุก path + method พร้อม condition `(proxy.pathsuffix MatchesPath …)`
 - กำหนดค่า `<ProxyEndpoint name>`, `<BasePath>` และไฟล์ output เองได้
 - รักษา order ของ path/method ตามที่เขียนในไฟล์ YAML เพื่อให้ diff อ่านง่าย
-- สามารถดึง ProxyEndpoint XML จาก Apigee (ผ่าน Management API) ลงมาเก็บในโฟลเดอร์ท้องถิ่นได้เลย
+- สามารถดึง ProxyEndpoint XML จาก Apigee (ผ่าน Management API) ลงมาเก็บในโฟลเดอร์ท้องถิ่นได้เลย พร้อมคำนวณ similarity/รายการ flow ที่ต่างกัน และถามยืนยันก่อนจะ update ไฟล์ปลายทางอัตโนมัติ
 
 ## โครงสร้างสำคัญใน repo
 
@@ -57,7 +57,7 @@ go run . \
 | `-token` | Bearer token เพื่อเรียก Management API (ถ้าไม่ใส่ จะอ่านจาก env `APIGEE_TOKEN`) |
 | `-revision` | ระบุ revision เฉพาะ (ถ้าไม่ใส่จะไปดึง revision ล่าสุดให้อัตโนมัติ) |
 | `-apigee-host` | base URL ของ Apigee Management API (default `https://apigee.googleapis.com`) |
-| `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints`) |
+| `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints` และจะลบไฟล์เดิมทุกครั้งก่อนดาวน์โหลดใหม่) |
 
 ## ตัวอย่างการใช้งาน
 
@@ -77,12 +77,15 @@ export APIGEE_TOKEN="$(gcloud auth print-access-token)"
 go run . -proxy my-proxy -download-dir apigee-proxy-endpoints
 ```
 
-คำสั่งจะดึง zip bundle ของ proxy revision ที่ใหม่ที่สุด, แตกเฉพาะไฟล์ใน `apiproxy/proxy-endpoints/` แล้วเซฟลงในโฟลเดอร์ที่กำหนด (สร้างให้อัตโนมัติถ้ายังไม่มี)
+คำสั่งจะดึง zip bundle ของ proxy revision ที่ใหม่ที่สุด, ลบไฟล์เก่าทิ้งก่อน แล้วแตกเฉพาะไฟล์ใน `apiproxy/proxy-endpoints/` ลงในโฟลเดอร์ที่กำหนด
+
+หลังดาวน์โหลดเสร็จ CLI จะคำนวณ similarity ระหว่างไฟล์ที่ generate (`proxy-endpoint.xml`) กับไฟล์ในโฟลเดอร์ดาวน์โหลด แล้วพิมพ์ชื่อไฟล์ที่ใกล้เคียงที่สุดพร้อมเปอร์เซ็นต์ พร้อมสรุปส่วนต่างของ flow (flow ที่เพิ่ม/หาย และ condition/description ที่ไม่ตรงกัน) เพื่อใช้ตรวจโครงสร้างได้เร็วขึ้น จากนั้นจะถามว่ายืนยันให้อัปเดตไฟล์ดาวน์โหลดให้ตรงกับไฟล์ที่ generate หรือไม่ (ตอบ `y` เพื่อเขียนทับ, กด Enter/`n` เพื่อข้าม)
 
 ## เคล็ดลับ & การดีบัก
 
 - หากเรียก `-proxy` แล้วขึ้น error ว่า “token required” ให้ตรวจสอบ env `APIGEE_TOKEN` หรือส่ง `-token` เป็น Bearer token เอง (สามารถใช้ `gcloud auth print-access-token` ได้ถ้าเป็น Apigee X ที่เชื่อมกับ Google Cloud)
 - หากเจอ error 403/404 ตอนดาวน์โหลด ให้เช็กว่า proxy name, org, และสิทธิ์ของ token ถูกต้อง รวมถึงตรวจสอบว่า proxy นั้นมี revision แล้วจริงๆ
+- หากไม่ได้ไฟล์ ProxyEndpoint เลย ให้ตรวจว่า proxy มีไฟล์อยู่ใน folder `apiproxy/proxy-endpoints` หรือ `apiproxy/proxies` (เครื่องมือรองรับทั้งสองโครงสร้าง)
 - หาก CLI แจ้งว่า “no paths defined” ให้ตรวจสอบว่าไฟล์ YAML มีส่วน `paths:` และจัด indent ถูกต้อง
 - ถ้าต้องการรักษา order ของ path/method ให้แก้ไฟล์ `openapi.yaml` ด้วยเครื่องมือที่ไม่สลับลำดับ key (เช่น VS Code + YAML extension)
 - คำอธิบายของแต่ละ flow จะใช้ `summary` ถ้ามี, ถ้าไม่มีจะถอยไปใช้ `description` หรือสร้างจาก `<METHOD> <Path>` ให้อัตโนมัติ
