@@ -30,9 +30,52 @@ func main() {
 			"Destination directory for downloaded ProxyEndpoint XML files",
 		)
 		apigeeToken = flag.String("token", "", "Apigee OAuth token (defaults to APIGEE_TOKEN env var)")
+		findBase    = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
 	)
 
 	flag.Parse()
+
+	if targetBase := strings.TrimSpace(*findBase); targetBase != "" {
+		org, token, host := resolveApigeeConfig(*apigeeOrg, *apigeeToken, *apigeeHost)
+		if org == "" || token == "" {
+			log.Fatal("finding proxies requires Apigee org (-org or APIGEE_ORG) and token (-token or APIGEE_TOKEN)")
+		}
+		progress := func(p apigee.ProxyScanProgress) {
+			if p.Err != nil {
+				fmt.Printf("[%d/%d] %s (rev %d) error: %v\n", p.Index, p.Total, p.Proxy, p.Revision, p.Err)
+				return
+			}
+			basePaths := "<none>"
+			if len(p.BasePaths) > 0 {
+				basePaths = strings.Join(p.BasePaths, ", ")
+			}
+			fmt.Printf("[%d/%d] %s (rev %d) basepaths: %s\n", p.Index, p.Total, p.Proxy, p.Revision, basePaths)
+			if p.Matched {
+				fmt.Println("  -> MATCH")
+			} else {
+				fmt.Println("  -> no match")
+			}
+		}
+		matches, err := apigee.FindProxiesByBasePath(apigee.FindProxyOptions{
+			Host:     host,
+			Org:      org,
+			Token:    token,
+			BasePath: targetBase,
+			Progress: progress,
+		})
+		if err != nil {
+			log.Fatalf("find proxies by base path: %v", err)
+		}
+		if len(matches) == 0 {
+			fmt.Printf("No Apigee proxies found with BasePath %s\n", targetBase)
+		} else {
+			fmt.Printf("Found %d Apigee proxies with BasePath %s:\n", len(matches), targetBase)
+			for _, match := range matches {
+				fmt.Printf("- %s (endpoint %s, revision %d)\n", match.Proxy, match.Endpoint, match.Revision)
+			}
+		}
+		return
+	}
 
 	data, err := os.ReadFile(*inputPath)
 	if err != nil {
@@ -68,21 +111,10 @@ func main() {
 	fmt.Printf("Generated %d flows at %s\n", len(flows), *outputPath)
 
 	if proxy := strings.TrimSpace(*proxyName); proxy != "" {
-		org := strings.TrimSpace(*apigeeOrg)
-		if org == "" {
-			org = strings.TrimSpace(os.Getenv("APIGEE_ORG"))
+		org, token, host := resolveApigeeConfig(*apigeeOrg, *apigeeToken, *apigeeHost)
+		if org == "" || token == "" {
+			log.Fatal("downloading proxies requires Apigee org (-org or APIGEE_ORG) and token (-token or APIGEE_TOKEN)")
 		}
-
-		token := strings.TrimSpace(*apigeeToken)
-		if token == "" {
-			token = strings.TrimSpace(os.Getenv("APIGEE_TOKEN"))
-		}
-
-		host := strings.TrimSpace(*apigeeHost)
-		if host == "" {
-			host = "https://apigee.googleapis.com"
-		}
-
 		downloadPath := strings.TrimSpace(*downloadDir)
 		if downloadPath == "" {
 			downloadPath = "downloaded-proxy-endpoints"
@@ -146,4 +178,22 @@ func main() {
 			fmt.Println("Skipped updating downloaded ProxyEndpoint.")
 		}
 	}
+}
+
+func resolveApigeeConfig(flagOrg, flagToken, flagHost string) (org, token, host string) {
+	org = strings.TrimSpace(flagOrg)
+	if org == "" {
+		org = strings.TrimSpace(os.Getenv("APIGEE_ORG"))
+	}
+
+	token = strings.TrimSpace(flagToken)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("APIGEE_TOKEN"))
+	}
+
+	host = strings.TrimSpace(flagHost)
+	if host == "" {
+		host = "https://apigee.googleapis.com"
+	}
+	return
 }

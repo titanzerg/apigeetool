@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"Apigee/internal/proxyxml"
 )
 
 // DownloadOptions contains parameters for downloading proxy endpoints.
@@ -43,17 +46,7 @@ func DownloadProxyEndpoints(opts DownloadOptions) error {
 		return fmt.Errorf("Apigee OAuth token is required (set -token or APIGEE_TOKEN)")
 	}
 
-	host := strings.TrimSuffix(strings.TrimSpace(opts.Host), "/")
-	if host == "" {
-		host = "https://apigee.googleapis.com"
-	}
-
-	client := &Client{
-		host:       host,
-		org:        org,
-		token:      token,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-	}
+	client := NewClient(opts.Host, org, token)
 
 	rev := opts.Revision
 	if rev <= 0 {
@@ -96,6 +89,20 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// NewClient builds a Client with default configuration.
+func NewClient(host, org, token string) *Client {
+	host = strings.TrimSuffix(strings.TrimSpace(host), "/")
+	if host == "" {
+		host = "https://apigee.googleapis.com"
+	}
+	return &Client{
+		host:       host,
+		org:        strings.TrimSpace(org),
+		token:      strings.TrimSpace(token),
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
 func (c *Client) latestRevision(proxy string) (int, error) {
 	endpoint := fmt.Sprintf(
 		"%s/v1/organizations/%s/apis/%s",
@@ -128,6 +135,124 @@ func (c *Client) latestRevision(proxy string) (int, error) {
 		}
 	}
 	return maxRev, nil
+}
+
+func (c *Client) listAPIs() ([]string, error) {
+	endpoint := fmt.Sprintf(
+		"%s/v1/organizations/%s/apis",
+		c.host,
+		url.PathEscape(c.org),
+	)
+
+	resp, err := c.doRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read apis list: %w", err)
+	}
+	names, err := decodeNameList(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode apis list: %w", err)
+	}
+	return names, nil
+}
+
+func (c *Client) listProxyEndpoints(proxy string, revision int) ([]string, error) {
+	endpoints := []string{
+		fmt.Sprintf(
+			"%s/v1/organizations/%s/apis/%s/revisions/%d/proxy-endpoints",
+			c.host,
+			url.PathEscape(c.org),
+			url.PathEscape(proxy),
+			revision,
+		),
+		fmt.Sprintf(
+			"%s/v1/organizations/%s/apis/%s/revisions/%d/proxies",
+			c.host,
+			url.PathEscape(c.org),
+			url.PathEscape(proxy),
+			revision,
+		),
+	}
+
+	var lastErr error
+	for _, endpoint := range endpoints {
+		resp, err := c.doRequestAny(http.MethodGet, endpoint, "application/json")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("apigee proxy endpoints list failed: %s", extractError(resp))
+			resp.Body.Close()
+			continue
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read proxy endpoints list: %w", err)
+		}
+		names, err := decodeNameList(data)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return names, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("unable to list proxy endpoints for %s rev %d", proxy, revision)
+}
+
+func (c *Client) fetchProxyEndpointConfig(proxy string, revision int, endpointName string) ([]byte, error) {
+	endpoints := []string{
+		fmt.Sprintf(
+			"%s/v1/organizations/%s/apis/%s/revisions/%d/proxy-endpoints/%s",
+			c.host,
+			url.PathEscape(c.org),
+			url.PathEscape(proxy),
+			revision,
+			url.PathEscape(endpointName),
+		),
+		fmt.Sprintf(
+			"%s/v1/organizations/%s/apis/%s/revisions/%d/proxies/%s",
+			c.host,
+			url.PathEscape(c.org),
+			url.PathEscape(proxy),
+			revision,
+			url.PathEscape(endpointName),
+		),
+	}
+
+	var lastErr error
+	for _, endpoint := range endpoints {
+		resp, err := c.doRequestAny(http.MethodGet, endpoint, "application/xml")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("apigee proxy endpoint download failed: %s", extractError(resp))
+			resp.Body.Close()
+			continue
+		}
+
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read proxy endpoint body: %w", err)
+		}
+		return data, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("unable to fetch proxy endpoint %s.%s rev %d", proxy, endpointName, revision)
 }
 
 func (c *Client) fetchProxyBundle(proxy string, revision int) ([]byte, error) {
@@ -259,6 +384,130 @@ func proxyEndpointPrefix(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func (c *Client) doRequestAny(method, endpoint, accept string) (*http.Response, error) {
+	req, err := http.NewRequest(method, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	return c.httpClient.Do(req)
+}
+
+type nameContainer struct {
+	Proxies []nameItem `json:"proxies"`
+	Items   []nameItem `json:"items"`
+	APIs    []nameItem `json:"apis"`
+}
+
+type nameItem struct {
+	Name string `json:"name"`
+}
+
+func decodeNameList(data []byte) ([]string, error) {
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		return arr, nil
+	}
+
+	var container nameContainer
+	if err := json.Unmarshal(data, &container); err == nil {
+		names := collectNames(container.Proxies)
+		names = append(names, collectNames(container.Items)...)
+		names = append(names, collectNames(container.APIs)...)
+		if len(names) > 0 {
+			return names, nil
+		}
+	}
+
+	var keyed map[string][]string
+	if err := json.Unmarshal(data, &keyed); err == nil {
+		for _, key := range []string{"apis", "items", "proxies"} {
+			if names := keyed[key]; len(names) > 0 {
+				return names, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("unsupported response: %s", strings.TrimSpace(string(data)))
+}
+
+func collectNames(items []nameItem) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Name != "" {
+			names = append(names, item.Name)
+		}
+	}
+	return names
+}
+
+type bundleEndpoint struct {
+	Name     string
+	BasePath string
+}
+
+func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
+	readerAt := bytes.NewReader(bundle)
+	zipReader, err := zip.NewReader(readerAt, int64(len(bundle)))
+	if err != nil {
+		return nil, fmt.Errorf("parse bundle zip: %w", err)
+	}
+
+	var endpoints []bundleEndpoint
+	for _, file := range zipReader.File {
+		name := file.Name
+		prefix, ok := proxyEndpointPrefix(name)
+		if !ok {
+			continue
+		}
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(name), ".xml") {
+			continue
+		}
+
+		rel := strings.TrimPrefix(name, prefix)
+		rel = strings.TrimLeft(rel, "/")
+		if rel == "" {
+			continue
+		}
+		segment := rel
+		if idx := strings.Index(segment, "/"); idx >= 0 {
+			segment = segment[:idx]
+		}
+		endpointName := strings.TrimSuffix(segment, path.Ext(segment))
+		rc, err := file.Open()
+		if err != nil {
+			return nil, fmt.Errorf("open %s in bundle: %w", name, err)
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+		basePath, err := proxyxml.ExtractBasePath(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse base path for %s: %w", name, err)
+		}
+		endpoints = append(endpoints, bundleEndpoint{
+			Name:     endpointName,
+			BasePath: basePath,
+		})
+	}
+
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("no ProxyEndpoint files found in Apigee bundle")
+	}
+	return endpoints, nil
 }
 
 // FindClosestProxyEndpoint finds the downloaded ProxyEndpoint XML that is most similar to the generated file.

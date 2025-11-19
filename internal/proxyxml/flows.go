@@ -147,3 +147,16 @@ func FilterFlows(flows []Flow, shouldSkip func(Flow) bool) []Flow {
 	}
 	return result
 }
+
+// ExtractBasePath reads the BasePath from a ProxyEndpoint XML document.
+func ExtractBasePath(data []byte) (string, error) {
+	var doc struct {
+		HTTPProxyConnection struct {
+			BasePath string `xml:"BasePath"`
+		} `xml:"HTTPProxyConnection"`
+	}
+	if err := xml.Unmarshal(data, &doc); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(doc.HTTPProxyConnection.BasePath), nil
+}
