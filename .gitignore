@@ -2,3 +2,4 @@
 *.txt
 *.sh
 *.yaml
+.env

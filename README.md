@@ -30,7 +30,8 @@
    go mod tidy
    ```
 2. เตรียมไฟล์ `openapi.yaml` ให้มีข้อมูล `info.title` และ `paths` ครบ
-3. สั่งรันคำสั่งด้านล่างเพื่อสร้าง ProxyEndpoint XML
+3. คัดลอกไฟล์ `.env.example` ไปเป็น `.env` แล้วใส่ค่า `APIGEE_ORG`, `APIGEE_TOKEN`, ฯลฯ (CLI จะอ่านอัตโนมัติถ้าไฟล์อยู่ในโฟลเดอร์เดียวกัน)
+4. สั่งรันคำสั่งด้านล่างเพื่อสร้าง ProxyEndpoint XML
 
 ```bash
 go run . \
@@ -60,6 +61,39 @@ go run . \
 | `-apigee-host` | base URL ของ Apigee Management API (default `https://apigee.googleapis.com`) |
 | `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints` และจะลบไฟล์เดิมทุกครั้งก่อนดาวน์โหลดใหม่) |
 | `-findproxy` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ไม่สร้างไฟล์ใหม่) |
+| `-sync` | เปิดโหมดซิงก์ proxy endpoints จาก Apigee ไปยัง PostgreSQL (ไม่สร้างไฟล์ XML) |
+| `-sync-db-url` | PostgreSQL connection string (เช่น `postgres://user:pass@host:5432/db?sslmode=disable`) ถ้าไม่ระบุจะอ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL` |
+| `-sync-table` | ชื่อ table ที่ต้องการให้อัปเดตข้อมูล proxy endpoints (default `apigee_proxy_endpoints`) |
+
+### โหมดซิงก์ข้อมูล proxy endpoints → PostgreSQL
+
+ตั้งค่า `APIGEE_ORG`/`APIGEE_TOKEN` ตามปกติ จากนั้นระบุ connection string ของ Postgres ด้วย flag `-sync-db-url` หรือ environment variables ข้างต้น แล้วสั่ง
+
+```bash
+go run . -sync -org my-org -token "$APIGEE_TOKEN" -sync-db-url postgres://...
+```
+
+คำสั่งจะ
+
+1. ไล่เรียก proxy ทุกตัวในองค์กร
+2. ดึง revision ล่าสุดและอ่านค่า BasePath ของ ProxyEndpoint ทุกไฟล์
+3. ล้างแถวทั้งหมดในตารางเป้าหมาย
+4. ใส่ข้อมูลล่าสุด (proxy, endpoint, revision, base path, updated_at) กลับลงไปใหม่ภายในการทำธุรกรรมเดียว
+
+ตัวอย่าง schema ที่ใช้ร่วมกันได้
+
+```sql
+CREATE TABLE apigee_proxy_endpoints (
+  proxy_name text NOT NULL,
+  endpoint_name text NOT NULL,
+  revision integer NOT NULL,
+  base_path text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (proxy_name, endpoint_name)
+);
+```
+
+ต้องให้สิทธิ์บัญชีที่ใช้เชื่อมต่อสามารถ `DELETE` + `INSERT` กับตารางดังกล่าว
 
 ## ตัวอย่างการใช้งาน
 
@@ -71,7 +105,7 @@ go run . -input openapi.yaml -output newproxy.xml
 
 ถ้าอยากทดสอบเฉพาะบาง path ให้ลบ path อื่นออกจาก `openapi.yaml` แล้วรันคำสั่งเดิมอีกครั้ง
 
-ดาวน์โหลด ProxyEndpoint XML ทุกไฟล์ของ proxy `my-proxy` (อิง revision ล่าสุด):
+ดาวน์โหลด ProxyEndpoint XML ทุกไฟล์ของ proxy `my-proxy` (อิง revision ล่าสุด) — ถ้ามี `.env` แล้วสามารถเริ่มต้นตรง `go run` ได้เลย:
 
 ```bash
 export APIGEE_ORG=my-org
@@ -81,7 +115,7 @@ go run . -proxy my-proxy -download-dir apigee-proxy-endpoints
 
 คำสั่งจะดึง zip bundle ของ proxy revision ที่ใหม่ที่สุด, ลบไฟล์เก่าทิ้งก่อน แล้วแตกเฉพาะไฟล์ใน `apiproxy/proxy-endpoints/` ลงในโฟลเดอร์ที่กำหนด
 
-ค้นหา proxy ที่มี BasePath ตรงกับ `/marine-dashboard`
+ค้นหา proxy ที่มี BasePath ตรงกับ `/marine-dashboard` (มี `.env` แล้วก็เริ่มที่ `go run` ได้เหมือนกัน)
 
 ```bash
 export APIGEE_ORG=my-org
@@ -96,6 +130,7 @@ go run . -findproxy /marine-dashboard
 ## เคล็ดลับ & การดีบัก
 
 - หากเรียก `-proxy` แล้วขึ้น error ว่า “token required” ให้ตรวจสอบ env `APIGEE_TOKEN` หรือส่ง `-token` เป็น Bearer token เอง (สามารถใช้ `gcloud auth print-access-token` ได้ถ้าเป็น Apigee X ที่เชื่อมกับ Google Cloud)
+- สามารถตั้งค่า `APIGEE_ORG`, `APIGEE_TOKEN`, `APIGEE_SYNC_DB_URL`, ฯลฯ ไว้ในไฟล์ `.env` เพื่อไม่ต้อง `export` ทุกครั้ง (มีตัวอย่างอยู่ใน `.env.example`)
 - หากเจอ error 403/404 ตอนดาวน์โหลด ให้เช็กว่า proxy name, org, และสิทธิ์ของ token ถูกต้อง รวมถึงตรวจสอบว่า proxy นั้นมี revision แล้วจริงๆ
 - หากไม่ได้ไฟล์ ProxyEndpoint เลย ให้ตรวจว่า proxy มีไฟล์อยู่ใน folder `apiproxy/proxy-endpoints` หรือ `apiproxy/proxies` (เครื่องมือรองรับทั้งสองโครงสร้าง)
 - โหมด `-findproxy` จะดาวน์โหลด bundle ของแต่ละ proxy มาตรวจ BasePath ภายในไฟล์ endpoint เพราะฉะนั้นต้องเตรียม token ที่มีสิทธิอ่าน proxy bundle

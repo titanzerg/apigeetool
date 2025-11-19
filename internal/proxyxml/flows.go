@@ -13,6 +13,7 @@ type Flow struct {
 	Name        string
 	Description string
 	Condition   string
+	RawXML      string
 }
 
 // ParseFlowsFromFile parses all Flow definitions from the given ProxyEndpoint XML file.
@@ -35,6 +36,7 @@ func ParseFlows(data []byte) ([]Flow, error) {
 			Name        string `xml:"name,attr"`
 			Description string `xml:"Description"`
 			Condition   string `xml:"Condition"`
+			InnerXML    string `xml:",innerxml"`
 		} `xml:"Flows>Flow"`
 	}
 	if err := xml.Unmarshal(data, &doc); err != nil {
@@ -47,6 +49,7 @@ func ParseFlows(data []byte) ([]Flow, error) {
 			Name:        strings.TrimSpace(fl.Name),
 			Description: strings.TrimSpace(fl.Description),
 			Condition:   strings.TrimSpace(fl.Condition),
+			RawXML:      strings.TrimSpace(fl.InnerXML),
 		})
 	}
 	return result, nil

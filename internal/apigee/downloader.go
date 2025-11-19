@@ -521,6 +521,11 @@ func FindClosestProxyEndpoint(generatedPath, dir string) (string, float64, error
 	if err != nil {
 		return "", 0, fmt.Errorf("read generated ProxyEndpoint: %w", err)
 	}
+	baseFlows, err := proxyxml.ParseFlows(baseData)
+	if err != nil {
+		return "", 0, fmt.Errorf("parse generated flows: %w", err)
+	}
+	baseSignatures := flowSignatures(baseFlows)
 
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
@@ -552,7 +557,11 @@ func FindClosestProxyEndpoint(generatedPath, dir string) (string, float64, error
 		if err != nil {
 			return err
 		}
-		score := similarityScore(string(baseData), string(data))
+		flows, err := proxyxml.ParseFlows(data)
+		if err != nil {
+			return fmt.Errorf("parse flows in %s: %w", path, err)
+		}
+		score := flowSimilarity(baseSignatures, flowSignatures(flows))
 		if score > bestScore {
 			bestScore = score
 			bestFile = path
@@ -568,26 +577,46 @@ func FindClosestProxyEndpoint(generatedPath, dir string) (string, float64, error
 	return bestFile, bestScore, nil
 }
 
-func similarityScore(a, b string) float64 {
-	linesA := normalizedLines(a)
-	linesB := normalizedLines(b)
-	if len(linesA) == 0 && len(linesB) == 0 {
+func flowSignatures(flows []proxyxml.Flow) []string {
+	if len(flows) == 0 {
+		return nil
+	}
+	signatures := make([]string, 0, len(flows))
+	for _, fl := range flows {
+		name := strings.TrimSpace(fl.Name)
+		condition := normalizeFlowField(fl.Condition)
+		description := normalizeFlowField(fl.Description)
+		signatures = append(signatures, fmt.Sprintf("%s|%s|%s", name, condition, description))
+	}
+	return signatures
+}
+
+func normalizeFlowField(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func flowSimilarity(a, b []string) float64 {
+	if len(a) == 0 && len(b) == 0 {
 		return 1
 	}
 
-	countA := make(map[string]int, len(linesA))
-	for _, line := range linesA {
-		countA[line]++
+	countA := make(map[string]int, len(a))
+	for _, val := range a {
+		countA[val]++
 	}
 
-	countB := make(map[string]int, len(linesB))
-	for _, line := range linesB {
-		countB[line]++
+	countB := make(map[string]int, len(b))
+	for _, val := range b {
+		countB[val]++
 	}
 
 	var matches int
-	for line, aCount := range countA {
-		if bCount := countB[line]; bCount > 0 {
+	for sig, aCount := range countA {
+		if bCount := countB[sig]; bCount > 0 {
 			if aCount < bCount {
 				matches += aCount
 			} else {
@@ -596,22 +625,9 @@ func similarityScore(a, b string) float64 {
 		}
 	}
 
-	total := len(linesA) + len(linesB)
+	total := len(a) + len(b)
 	if total == 0 {
 		return 0
 	}
 	return float64(2*matches) / float64(total)
-}
-
-func normalizedLines(content string) []string {
-	raw := strings.Split(content, "\n")
-	lines := make([]string, 0, len(raw))
-	for _, line := range raw {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	return lines
 }

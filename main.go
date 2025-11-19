@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -15,6 +16,10 @@ import (
 )
 
 func main() {
+	if err := loadDotEnv(".env"); err != nil {
+		log.Fatalf("load .env: %v", err)
+	}
+
 	var (
 		inputPath   = flag.String("input", "openapi.yaml", "path to the OpenAPI v3 file")
 		outputPath  = flag.String("output", "proxy-endpoint.xml", "output path for the Apigee ProxyEndpoint XML")
@@ -31,6 +36,9 @@ func main() {
 		)
 		apigeeToken = flag.String("token", "", "Apigee OAuth token (defaults to APIGEE_TOKEN env var)")
 		findBase    = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
+		syncFlag    = flag.Bool("sync", false, "Sync all Apigee proxy endpoints into PostgreSQL")
+		syncDBURL   = flag.String("sync-db-url", "", "PostgreSQL connection URL (defaults to APIGEE_SYNC_DB_URL or DATABASE_URL)")
+		syncTable   = flag.String("sync-table", "apigee_proxy_endpoints", "Target PostgreSQL table for -sync")
 	)
 
 	flag.Parse()
@@ -74,6 +82,58 @@ func main() {
 				fmt.Printf("- %s (endpoint %s, revision %d)\n", match.Proxy, match.Endpoint, match.Revision)
 			}
 		}
+		return
+	}
+
+	if *syncFlag {
+		org, token, host := resolveApigeeConfig(*apigeeOrg, *apigeeToken, *apigeeHost)
+		if org == "" || token == "" {
+			log.Fatal("sync requires Apigee org (-org or APIGEE_ORG) and token (-token or APIGEE_TOKEN)")
+		}
+
+		dbURL := strings.TrimSpace(*syncDBURL)
+		if dbURL == "" {
+			dbURL = strings.TrimSpace(os.Getenv("APIGEE_SYNC_DB_URL"))
+		}
+		if dbURL == "" {
+			dbURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+		}
+		if dbURL == "" {
+			log.Fatal("sync requires PostgreSQL connection string via -sync-db-url, APIGEE_SYNC_DB_URL, or DATABASE_URL")
+		}
+
+		table := strings.TrimSpace(*syncTable)
+		if table == "" {
+			table = "apigee_proxy_endpoints"
+		}
+
+		progress := func(p apigee.ProxyScanProgress) {
+			if p.Err != nil {
+				fmt.Printf("[%d/%d] %s (rev %d) error: %v\n", p.Index, p.Total, p.Proxy, p.Revision, p.Err)
+				return
+			}
+			basePaths := "<none>"
+			if len(p.BasePaths) > 0 {
+				basePaths = strings.Join(p.BasePaths, ", ")
+			}
+			fmt.Printf("[%d/%d] %s (rev %d) basepaths: %s\n", p.Index, p.Total, p.Proxy, p.Revision, basePaths)
+		}
+
+		endpoints, err := apigee.CollectProxyEndpoints(apigee.CollectProxyEndpointsOptions{
+			Host:     host,
+			Org:      org,
+			Token:    token,
+			Progress: progress,
+		})
+		if err != nil {
+			log.Fatalf("collect proxy endpoints: %v", err)
+		}
+		fmt.Printf("Fetched %d proxy endpoint(s) from Apigee\n", len(endpoints))
+
+		if err := syncProxyEndpoints(context.Background(), dbURL, table, endpoints); err != nil {
+			log.Fatalf("sync proxy endpoints to PostgreSQL: %v", err)
+		}
+		fmt.Printf("Updated %d proxy endpoint(s) in %s\n", len(endpoints), table)
 		return
 	}
 
