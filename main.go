@@ -38,7 +38,10 @@ func main() {
 		findBase    = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
 		syncFlag    = flag.Bool("sync", false, "Sync all Apigee proxy endpoints into PostgreSQL")
 		syncDBURL   = flag.String("sync-db-url", "", "PostgreSQL connection URL (defaults to APIGEE_SYNC_DB_URL or DATABASE_URL)")
-		syncTable   = flag.String("sync-table", "apigee_proxy_endpoints", "Target PostgreSQL table for -sync")
+		syncTable   = flag.String("sync-table", "apigee.apigee_proxy_endpoints", "Target PostgreSQL table for -sync")
+		syncSSLRoot = flag.String("sync-ssl-rootcert", "", "Path to CA certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_ROOTCERT)")
+		syncSSLCert = flag.String("sync-ssl-cert", "", "Path to client certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_CERT)")
+		syncSSLKey  = flag.String("sync-ssl-key", "", "Path to client key for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_KEY)")
 	)
 
 	flag.Parse()
@@ -104,7 +107,7 @@ func main() {
 
 		table := strings.TrimSpace(*syncTable)
 		if table == "" {
-			table = "apigee_proxy_endpoints"
+			table = "apigee.apigee_proxy_endpoints"
 		}
 
 		progress := func(p apigee.ProxyScanProgress) {
@@ -130,7 +133,18 @@ func main() {
 		}
 		fmt.Printf("Fetched %d proxy endpoint(s) from Apigee\n", len(endpoints))
 
-		if err := syncProxyEndpoints(context.Background(), dbURL, table, endpoints); err != nil {
+		rootCert := firstNonEmpty(*syncSSLRoot, os.Getenv("APIGEE_SYNC_DB_SSL_ROOTCERT"))
+		clientCert := firstNonEmpty(*syncSSLCert, os.Getenv("APIGEE_SYNC_DB_SSL_CERT"))
+		clientKey := firstNonEmpty(*syncSSLKey, os.Getenv("APIGEE_SYNC_DB_SSL_KEY"))
+
+		dbOpts := dbConnOptions{
+			URL:            dbURL,
+			RootCertPath:   rootCert,
+			ClientCertPath: clientCert,
+			ClientKeyPath:  clientKey,
+		}
+
+		if err := syncProxyEndpoints(context.Background(), dbOpts, table, endpoints); err != nil {
 			log.Fatalf("sync proxy endpoints to PostgreSQL: %v", err)
 		}
 		fmt.Printf("Updated %d proxy endpoint(s) in %s\n", len(endpoints), table)
@@ -256,4 +270,13 @@ func resolveApigeeConfig(flagOrg, flagToken, flagHost string) (org, token, host 
 		host = "https://apigee.googleapis.com"
 	}
 	return
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

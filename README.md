@@ -62,8 +62,11 @@ go run . \
 | `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints` และจะลบไฟล์เดิมทุกครั้งก่อนดาวน์โหลดใหม่) |
 | `-findproxy` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ไม่สร้างไฟล์ใหม่) |
 | `-sync` | เปิดโหมดซิงก์ proxy endpoints จาก Apigee ไปยัง PostgreSQL (ไม่สร้างไฟล์ XML) |
-| `-sync-db-url` | PostgreSQL connection string (เช่น `postgres://user:pass@host:5432/db?sslmode=disable`) ถ้าไม่ระบุจะอ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL` |
-| `-sync-table` | ชื่อ table ที่ต้องการให้อัปเดตข้อมูล proxy endpoints (default `apigee_proxy_endpoints`) |
+| `-sync-db-url` | PostgreSQL connection string (เช่น `postgres://user:pass@host:5432/db?sslmode=require`) ถ้าไม่ระบุจะอ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL` |
+| `-sync-table` | ชื่อ table ที่ต้องการให้อัปเดตข้อมูล proxy endpoints (default `apigee.apigee_proxy_endpoints`) |
+| `-sync-ssl-rootcert` | path ของไฟล์ CA certificate (`.pem`) ที่ใช้ยืนยันตัวตนเซิร์ฟเวอร์ PostgreSQL (default อ่านจาก `APIGEE_SYNC_DB_SSL_ROOTCERT`) |
+| `-sync-ssl-cert` | path ของ client certificate (ถ้าระบุจะบังคับใช้ `sslmode=require`) |
+| `-sync-ssl-key` | path ของ client private key ที่จับคู่กับ certificate ข้างต้น |
 
 ### โหมดซิงก์ข้อมูล proxy endpoints → PostgreSQL
 
@@ -80,10 +83,25 @@ go run . -sync -org my-org -token "$APIGEE_TOKEN" -sync-db-url postgres://...
 3. ล้างแถวทั้งหมดในตารางเป้าหมาย
 4. ใส่ข้อมูลล่าสุด (proxy, endpoint, revision, base path, updated_at) กลับลงไปใหม่ภายในการทำธุรกรรมเดียว
 
+> ระบบจะบังคับ `sslmode=require` อัตโนมัติ และจะเติมค่า `sslrootcert`, `sslcert`, `sslkey` จาก flag/ตัวแปรสภาพแวดล้อมที่ตั้งไว้ เพื่อให้เชื่อมต่อผ่าน TLS โดยใช้ไฟล์ `.pem` ที่คุณเตรียมไว้
+
+สำหรับการตั้งค่าผ่าน `.env` ให้ระบุ
+
+```dotenv
+APIGEE_SYNC_DB_URL=postgres://.../mydb?sslmode=require
+APIGEE_SYNC_DB_SSL_ROOTCERT=certs/server-ca.pem
+APIGEE_SYNC_DB_SSL_CERT=certs/client-cert.pem
+APIGEE_SYNC_DB_SSL_KEY=certs/client-key.pem
+```
+
+ไฟล์ `.pem` ทั้งสามต้องอยู่บนเครื่องเดียวกับ CLI และระบุ path ที่เข้าถึงได้จริง (สามารถเป็น absolute หรือ relative path ก็ได้)
+
 ตัวอย่าง schema ที่ใช้ร่วมกันได้
 
 ```sql
-CREATE TABLE apigee_proxy_endpoints (
+CREATE SCHEMA IF NOT EXISTS apigee;
+
+CREATE TABLE apigee.apigee_proxy_endpoints (
   proxy_name text NOT NULL,
   endpoint_name text NOT NULL,
   revision integer NOT NULL,
