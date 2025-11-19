@@ -18,14 +18,14 @@ func PrintFlowDiff(diff proxyxml.FlowDiff) bool {
 	}
 
 	if len(diff.Missing) > 0 {
-		fmt.Println("Flows missing from downloaded proxy (add these):")
+		fmt.Println("New flows to add into apigee:")
 		for _, fl := range diff.Missing {
 			fmt.Printf("- %s (%s)\n", fl.Name, fl.Condition)
 		}
 	}
 
 	if len(filteredExtra) > 0 {
-		fmt.Println("Flows only in downloaded proxy (remove/rename if not needed):")
+		fmt.Println("Missing flows from apigee (remove/rename if not needed):")
 		for _, fl := range filteredExtra {
 			fmt.Printf("- %s (%s)\n", fl.Name, fl.Condition)
 		}
