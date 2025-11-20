@@ -34,14 +34,15 @@ func main() {
 			"downloaded-proxy-endpoints",
 			"Destination directory for downloaded ProxyEndpoint XML files",
 		)
-		apigeeToken = flag.String("token", "", "Apigee OAuth token (defaults to APIGEE_TOKEN env var)")
-		findBase    = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
-		syncFlag    = flag.Bool("sync", false, "Sync all Apigee proxy endpoints into PostgreSQL")
-		syncDBURL   = flag.String("sync-db-url", "", "PostgreSQL connection URL (defaults to APIGEE_SYNC_DB_URL or DATABASE_URL)")
-		syncTable   = flag.String("sync-table", "apigee.apigee_proxy_endpoints", "Target PostgreSQL table for -sync")
-		syncSSLRoot = flag.String("sync-ssl-rootcert", "", "Path to CA certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_ROOTCERT)")
-		syncSSLCert = flag.String("sync-ssl-cert", "", "Path to client certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_CERT)")
-		syncSSLKey  = flag.String("sync-ssl-key", "", "Path to client key for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_KEY)")
+		apigeeToken        = flag.String("token", "", "Apigee OAuth token (defaults to APIGEE_TOKEN env var)")
+		findBase           = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
+		syncFlag           = flag.Bool("sync", false, "Sync all Apigee proxy endpoints into PostgreSQL")
+		syncDBURL          = flag.String("sync-db-url", "", "PostgreSQL connection URL (defaults to APIGEE_SYNC_DB_URL or DATABASE_URL)")
+		syncEndpointsTable = flag.String("sync-endpoints-table", "apigee.apigee_proxy_endpoints", "Target PostgreSQL table for -sync (endpoints)")
+		syncTargetTable    = flag.String("sync-target-table", "apigee.apigee_target_servers", "Target PostgreSQL table for target servers (sync mode)")
+		syncSSLRoot        = flag.String("sync-ssl-rootcert", "", "Path to CA certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_ROOTCERT)")
+		syncSSLCert        = flag.String("sync-ssl-cert", "", "Path to client certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_CERT)")
+		syncSSLKey         = flag.String("sync-ssl-key", "", "Path to client key for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_KEY)")
 	)
 
 	flag.Parse()
@@ -105,9 +106,16 @@ func main() {
 			log.Fatal("sync requires PostgreSQL connection string via -sync-db-url, APIGEE_SYNC_DB_URL, or DATABASE_URL")
 		}
 
-		table := strings.TrimSpace(*syncTable)
+		table := strings.TrimSpace(*syncEndpointsTable)
 		if table == "" {
 			table = "apigee.apigee_proxy_endpoints"
+		}
+		targetTable := strings.TrimSpace(*syncTargetTable)
+		if targetTable == "" {
+			targetTable = strings.TrimSpace(os.Getenv("APIGEE_SYNC_TARGET_TABLE"))
+		}
+		if targetTable == "" {
+			targetTable = "apigee.apigee_target_servers"
 		}
 
 		progress := func(p apigee.ProxyScanProgress) {
@@ -148,6 +156,21 @@ func main() {
 			log.Fatalf("sync proxy endpoints to PostgreSQL: %v", err)
 		}
 		fmt.Printf("Updated %d proxy endpoint(s) in %s\n", len(endpoints), table)
+
+		tsRecords, err := apigee.CollectTargetServers(apigee.CollectTargetServersOptions{
+			Host:      host,
+			Org:       org,
+			Token:     token,
+			Endpoints: endpoints,
+		})
+		if err != nil {
+			log.Fatalf("collect target servers: %v", err)
+		}
+		fmt.Printf("Fetched %d target server(s) from Apigee\n", len(tsRecords))
+		if err := syncTargetServers(context.Background(), dbOpts, targetTable, tsRecords); err != nil {
+			log.Fatalf("sync target servers to PostgreSQL: %v", err)
+		}
+		fmt.Printf("Updated %d target server(s) in %s\n", len(tsRecords), targetTable)
 		return
 	}
 

@@ -41,12 +41,33 @@ type CollectProxyEndpointsOptions struct {
 	Progress func(ProxyScanProgress)
 }
 
+// CollectTargetServersOptions controls the behavior of CollectTargetServers.
+type CollectTargetServersOptions struct {
+	Host      string
+	Org       string
+	Token     string
+	Endpoints []ProxyEndpointRecord
+}
+
 // ProxyEndpointRecord describes a ProxyEndpoint retrieved from Apigee.
 type ProxyEndpointRecord struct {
 	Proxy    string
 	Endpoint string
 	Revision int
 	BasePath string
+	Targets  []string
+	Envs     []string
+	Flows    int
+}
+
+// TargetServerRecord describes a target server with environment context.
+type TargetServerRecord struct {
+	Name        string
+	Environment string
+	URL         string
+	Host        string
+	Port        int
+	IsSSL       bool
 }
 
 // FindProxiesByBasePath lists Apigee proxies with a matching BasePath.
@@ -205,12 +226,24 @@ func CollectProxyEndpoints(opts CollectProxyEndpointsOptions) ([]ProxyEndpointRe
 			}
 			continue
 		}
+		envs, err := client.environmentsForRevision(proxy, rev)
+		if err != nil {
+			envs = nil
+		}
+		if len(envs) == 0 {
+			if allEnvs, listErr := client.listEnvironments(); listErr == nil {
+				envs = allEnvs
+			}
+		}
 		for _, endpoint := range endpoints {
 			endpointsOut = append(endpointsOut, ProxyEndpointRecord{
 				Proxy:    proxy,
 				Endpoint: endpoint.Name,
 				Revision: rev,
 				BasePath: endpoint.BasePath,
+				Targets:  endpoint.TargetServers,
+				Envs:     envs,
+				Flows:    endpoint.FlowCount,
 			})
 		}
 		if opts.Progress != nil {
@@ -254,4 +287,43 @@ func uniqueBasePaths(endpoints []bundleEndpoint) []string {
 		result = append(result, base)
 	}
 	return result
+}
+
+// CollectTargetServers fetches target server details for environments referenced by the endpoints.
+func CollectTargetServers(opts CollectTargetServersOptions) ([]TargetServerRecord, error) {
+	org := strings.TrimSpace(opts.Org)
+	token := strings.TrimSpace(opts.Token)
+	host := strings.TrimSpace(opts.Host)
+	if org == "" || token == "" {
+		return nil, fmt.Errorf("Apigee org and token are required")
+	}
+
+	client := NewClient(host, org, token)
+
+	envSet := make(map[string]struct{})
+	for _, ep := range opts.Endpoints {
+		for _, env := range ep.Envs {
+			env = strings.TrimSpace(env)
+			if env == "" {
+				continue
+			}
+			envSet[env] = struct{}{}
+		}
+	}
+
+	var records []TargetServerRecord
+	for env := range envSet {
+		targetNames, err := client.listTargetServers(env)
+		if err != nil {
+			return nil, fmt.Errorf("list target servers in %s: %w", env, err)
+		}
+		for _, tgt := range targetNames {
+			rec, err := client.fetchTargetServer(env, tgt)
+			if err != nil {
+				return nil, fmt.Errorf("fetch target server %s/%s: %w", env, tgt, err)
+			}
+			records = append(records, rec)
+		}
+	}
+	return records, nil
 }

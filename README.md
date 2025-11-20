@@ -63,7 +63,8 @@ go run . \
 | `-findproxy` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ไม่สร้างไฟล์ใหม่) |
 | `-sync` | เปิดโหมดซิงก์ proxy endpoints จาก Apigee ไปยัง PostgreSQL (ไม่สร้างไฟล์ XML) |
 | `-sync-db-url` | PostgreSQL connection string (เช่น `postgres://user:pass@host:5432/db?sslmode=require`) ถ้าไม่ระบุจะอ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL` |
-| `-sync-table` | ชื่อ table ที่ต้องการให้อัปเดตข้อมูล proxy endpoints (default `apigee.apigee_proxy_endpoints`) |
+| `-sync-endpoints-table` | ชื่อ table ที่ต้องการให้อัปเดตข้อมูล proxy endpoints (default `apigee.apigee_proxy_endpoints`) |
+| `-sync-target-table` | ชื่อ table สำหรับบันทึก target server + environment (default `apigee.apigee_target_servers`) |
 | `-sync-ssl-rootcert` | path ของไฟล์ CA certificate (`.pem`) ที่ใช้ยืนยันตัวตนเซิร์ฟเวอร์ PostgreSQL (default อ่านจาก `APIGEE_SYNC_DB_SSL_ROOTCERT`) |
 | `-sync-ssl-cert` | path ของ client certificate (ถ้าระบุจะบังคับใช้ `sslmode=require`) |
 | `-sync-ssl-key` | path ของ client private key ที่จับคู่กับ certificate ข้างต้น |
@@ -79,9 +80,10 @@ go run . -sync -org my-org -token "$APIGEE_TOKEN" -sync-db-url postgres://...
 คำสั่งจะ
 
 1. ไล่เรียก proxy ทุกตัวในองค์กร
-2. ดึง revision ล่าสุดและอ่านค่า BasePath ของ ProxyEndpoint ทุกไฟล์
+2. ดึง revision ล่าสุดและอ่านค่า BasePath พร้อม TargetEndpoint servers, จำนวน flows, และ environment ที่ deploy ของ ProxyEndpoint ทุกไฟล์
 3. ล้างแถวทั้งหมดในตารางเป้าหมาย
-4. ใส่ข้อมูลล่าสุด (proxy, endpoint, revision, base path, updated_at) กลับลงไปใหม่ภายในการทำธุรกรรมเดียว
+4. ใส่ข้อมูลล่าสุด (proxy, endpoint, revision, base path, target servers, environments, flow count, updated_at) กลับลงไปใหม่ภายในการทำธุรกรรมเดียว
+5. ดึงข้อมูล target server ที่อ้างอิงในแต่ละ environment แล้วบันทึกลง table เป้าหมายสำหรับ target server แยกต่างหาก
 
 > ระบบจะบังคับ `sslmode=require` อัตโนมัติ และจะเติมค่า `sslrootcert`, `sslcert`, `sslkey` จาก flag/ตัวแปรสภาพแวดล้อมที่ตั้งไว้ เพื่อให้เชื่อมต่อผ่าน TLS โดยใช้ไฟล์ `.pem` ที่คุณเตรียมไว้
 
@@ -106,8 +108,22 @@ CREATE TABLE apigee.apigee_proxy_endpoints (
   endpoint_name text NOT NULL,
   revision integer NOT NULL,
   base_path text NOT NULL,
+  target_servers text[] NOT NULL DEFAULT '{}',
+  environments text[] NOT NULL DEFAULT '{}',
+  flow_count integer NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (proxy_name, endpoint_name)
+);
+
+CREATE TABLE apigee.apigee_target_servers (
+  name text NOT NULL,
+  environment text NOT NULL,
+  url text NOT NULL,
+  host text NOT NULL,
+  port integer NOT NULL,
+  is_ssl boolean NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (environment, name)
 );
 ```
 

@@ -255,6 +255,72 @@ func (c *Client) fetchProxyEndpointConfig(proxy string, revision int, endpointNa
 	return nil, fmt.Errorf("unable to fetch proxy endpoint %s.%s rev %d", proxy, endpointName, revision)
 }
 
+func (c *Client) environmentsForRevision(proxy string, revision int) ([]string, error) {
+	endpoint := fmt.Sprintf(
+		"%s/v1/organizations/%s/apis/%s/deployments",
+		c.host,
+		url.PathEscape(c.org),
+		url.PathEscape(proxy),
+	)
+
+	type revisionInfo struct {
+		Name  string `json:"name"`
+		State string `json:"state"`
+	}
+	type deployment struct {
+		Environment string         `json:"environment"`
+		Revision    []revisionInfo `json:"revision"`
+	}
+	var payload struct {
+		Deployments []deployment `json:"deployments"`
+	}
+
+	resp, err := c.doRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode deployments: %w", err)
+	}
+
+	var envs []string
+	for _, dep := range payload.Deployments {
+		for _, rev := range dep.Revision {
+			num, _ := strconv.Atoi(strings.TrimSpace(rev.Name))
+			if num == revision && strings.EqualFold(strings.TrimSpace(rev.State), "deployed") {
+				envs = append(envs, strings.TrimSpace(dep.Environment))
+				break
+			}
+		}
+	}
+	return envs, nil
+}
+
+func (c *Client) listEnvironments() ([]string, error) {
+	endpoint := fmt.Sprintf(
+		"%s/v1/organizations/%s/environments",
+		c.host,
+		url.PathEscape(c.org),
+	)
+	resp, err := c.doRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read environments: %w", err)
+	}
+	names, err := decodeNameList(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode environments: %w", err)
+	}
+	return names, nil
+}
+
 func (c *Client) fetchProxyBundle(proxy string, revision int) ([]byte, error) {
 	endpoint := fmt.Sprintf(
 		"%s/v1/organizations/%s/apis/%s/revisions/%d?format=bundle",
@@ -386,6 +452,116 @@ func proxyEndpointPrefix(name string) (string, bool) {
 	return "", false
 }
 
+func (c *Client) fetchTargetServer(env, name string) (TargetServerRecord, error) {
+	endpoint := fmt.Sprintf(
+		"%s/v1/organizations/%s/environments/%s/targetservers/%s",
+		c.host,
+		url.PathEscape(c.org),
+		url.PathEscape(env),
+		url.PathEscape(name),
+	)
+
+	resp, err := c.doRequest(endpoint)
+	if err != nil {
+		return TargetServerRecord{}, err
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		Name    string `json:"name"`
+		Host    string `json:"host"`
+		Port    int    `json:"port"`
+		SSLInfo struct {
+			Enabled bool `json:"enabled"`
+		} `json:"sSLInfo"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return TargetServerRecord{}, fmt.Errorf("decode target server: %w", err)
+	}
+
+	host := strings.TrimSpace(payload.Host)
+	port := payload.Port
+	isSSL := payload.SSLInfo.Enabled
+	scheme := "http"
+	if isSSL || port == 443 {
+		scheme = "https"
+	}
+	urlVal := fmt.Sprintf("%s://%s", scheme, host)
+	if port > 0 && port != 80 && port != 443 {
+		urlVal = fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	}
+
+	return TargetServerRecord{
+		Name:        strings.TrimSpace(payload.Name),
+		Environment: env,
+		Host:        host,
+		Port:        port,
+		IsSSL:       isSSL,
+		URL:         urlVal,
+	}, nil
+}
+
+func (c *Client) listTargetServers(env string) ([]string, error) {
+	endpoint := fmt.Sprintf(
+		"%s/v1/organizations/%s/environments/%s/targetservers",
+		c.host,
+		url.PathEscape(c.org),
+		url.PathEscape(env),
+	)
+	resp, err := c.doRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read target servers: %w", err)
+	}
+	names, err := decodeNameList(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode target servers: %w", err)
+	}
+	return names, nil
+}
+
+func targetEndpointPrefix(name string) (string, bool) {
+	prefixes := []string{
+		"apiproxy/targets/",
+		"apiproxy/target-endpoints/",
+		"apiproxy/target_endpoints/",
+		"apiproxy/target-endpoint/",
+		"apiproxy/target_endpoint/",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return prefix, true
+		}
+	}
+	return "", false
+}
+
+func mergeAndUnique(base []string, extra []string) []string {
+	result := append([]string{}, base...)
+	seen := make(map[string]struct{}, len(result))
+	for _, val := range result {
+		seen[strings.ToLower(val)] = struct{}{}
+	}
+	for _, val := range extra {
+		val = strings.TrimSpace(val)
+		if val == "" {
+			continue
+		}
+		key := strings.ToLower(val)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, val)
+	}
+	return result
+}
+
 func (c *Client) doRequestAny(method, endpoint, accept string) (*http.Response, error) {
 	req, err := http.NewRequest(method, endpoint, nil)
 	if err != nil {
@@ -450,8 +626,10 @@ func collectNames(items []nameItem) []string {
 }
 
 type bundleEndpoint struct {
-	Name     string
-	BasePath string
+	Name          string
+	BasePath      string
+	TargetServers []string
+	FlowCount     int
 }
 
 func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
@@ -461,17 +639,56 @@ func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
 		return nil, fmt.Errorf("parse bundle zip: %w", err)
 	}
 
-	var endpoints []bundleEndpoint
+	type proxyMeta struct {
+		basePath     string
+		targetRoutes []string
+		flowCount    int
+	}
+
+	targetServers := make(map[string][]string)
+	proxyData := make(map[string]proxyMeta)
+
 	for _, file := range zipReader.File {
 		name := file.Name
-		prefix, ok := proxyEndpointPrefix(name)
-		if !ok {
-			continue
-		}
 		if file.FileInfo().IsDir() {
 			continue
 		}
 		if !strings.HasSuffix(strings.ToLower(name), ".xml") {
+			continue
+		}
+
+		rc, err := file.Open()
+		if err != nil {
+			return nil, fmt.Errorf("open %s in bundle: %w", name, err)
+		}
+		data, readErr := io.ReadAll(rc)
+		rc.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read %s: %w", name, readErr)
+		}
+
+		if targetPrefix, ok := targetEndpointPrefix(name); ok {
+			rel := strings.TrimPrefix(name, targetPrefix)
+			if rel == "" {
+				continue
+			}
+			targetName, servers, err := proxyxml.ParseTargetEndpointServers(data)
+			if err != nil {
+				return nil, fmt.Errorf("parse target endpoint %s: %w", name, err)
+			}
+			if targetName == "" {
+				targetName = strings.TrimSuffix(rel, path.Ext(rel))
+			}
+			if targetName == "" {
+				continue
+			}
+			key := strings.ToLower(targetName)
+			targetServers[key] = mergeAndUnique(targetServers[key], servers)
+			continue
+		}
+
+		prefix, ok := proxyEndpointPrefix(name)
+		if !ok {
 			continue
 		}
 
@@ -485,28 +702,48 @@ func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
 			segment = segment[:idx]
 		}
 		endpointName := strings.TrimSuffix(segment, path.Ext(segment))
-		rc, err := file.Open()
+
+		flows, err := proxyxml.ParseFlows(data)
 		if err != nil {
-			return nil, fmt.Errorf("open %s in bundle: %w", name, err)
-		}
-		data, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", name, err)
+			return nil, fmt.Errorf("parse flows for %s: %w", name, err)
 		}
 		basePath, err := proxyxml.ExtractBasePath(data)
 		if err != nil {
 			return nil, fmt.Errorf("parse base path for %s: %w", name, err)
 		}
+		targets, err := proxyxml.ExtractRouteTargets(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse route targets for %s: %w", name, err)
+		}
+		proxyData[endpointName] = proxyMeta{
+			basePath:     basePath,
+			targetRoutes: targets,
+			flowCount:    len(flows),
+		}
+	}
+
+	if len(proxyData) == 0 {
+		return nil, fmt.Errorf("no ProxyEndpoint files found in Apigee bundle")
+	}
+
+	var endpoints []bundleEndpoint
+	for name, meta := range proxyData {
+		var servers []string
+		for _, tgt := range meta.targetRoutes {
+			key := strings.ToLower(strings.TrimSpace(tgt))
+			if key == "" {
+				continue
+			}
+			servers = append(servers, targetServers[key]...)
+		}
 		endpoints = append(endpoints, bundleEndpoint{
-			Name:     endpointName,
-			BasePath: basePath,
+			Name:          name,
+			BasePath:      meta.basePath,
+			TargetServers: mergeAndUnique(nil, servers),
+			FlowCount:     meta.flowCount,
 		})
 	}
 
-	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("no ProxyEndpoint files found in Apigee bundle")
-	}
 	return endpoints, nil
 }
 

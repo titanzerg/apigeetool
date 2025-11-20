@@ -49,13 +49,65 @@ func syncProxyEndpoints(ctx context.Context, dbOpts dbConnOptions, table string,
 	}
 
 	insertSQL := fmt.Sprintf(
-		"INSERT INTO %s (proxy_name, endpoint_name, revision, base_path, updated_at) VALUES ($1, $2, $3, $4, $5)",
+		"INSERT INTO %s (proxy_name, endpoint_name, revision, base_path, target_servers, environments, flow_count, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
 		quotedTable,
 	)
 	snapshot := time.Now().UTC()
 	for _, ep := range endpoints {
-		if _, err := tx.Exec(ctx, insertSQL, ep.Proxy, ep.Endpoint, ep.Revision, ep.BasePath, snapshot); err != nil {
+		servers := ep.Targets
+		if servers == nil {
+			servers = []string{}
+		}
+		envs := ep.Envs
+		if envs == nil {
+			envs = []string{}
+		}
+		if _, err := tx.Exec(ctx, insertSQL, ep.Proxy, ep.Endpoint, ep.Revision, ep.BasePath, servers, envs, ep.Flows, snapshot); err != nil {
 			return fmt.Errorf("insert %s.%s: %w", ep.Proxy, ep.Endpoint, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+func syncTargetServers(ctx context.Context, dbOpts dbConnOptions, table string, servers []apigee.TargetServerRecord) error {
+	quotedTable, err := quoteTableName(table)
+	if err != nil {
+		return err
+	}
+
+	dbURL, err := buildDatabaseURL(dbOpts)
+	if err != nil {
+		return err
+	}
+
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		return fmt.Errorf("connect to postgres: %w", err)
+	}
+	defer pool.Close()
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, "DELETE FROM "+quotedTable); err != nil {
+		return fmt.Errorf("clear %s: %w", quotedTable, err)
+	}
+
+	insertSQL := fmt.Sprintf(
+		"INSERT INTO %s (name, environment, url, host, port, is_ssl, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+		quotedTable,
+	)
+	now := time.Now().UTC()
+	for _, srv := range servers {
+		if _, err := tx.Exec(ctx, insertSQL, srv.Name, srv.Environment, srv.URL, srv.Host, srv.Port, srv.IsSSL, now); err != nil {
+			return fmt.Errorf("insert target server %s/%s: %w", srv.Environment, srv.Name, err)
 		}
 	}
 
