@@ -29,6 +29,8 @@ type ProxyScanProgress struct {
 	Proxy     string
 	Revision  int
 	BasePaths []string
+	Envs      []string
+	EnvError  string
 	Matched   bool
 	Err       error
 }
@@ -226,13 +228,12 @@ func CollectProxyEndpoints(opts CollectProxyEndpointsOptions) ([]ProxyEndpointRe
 			}
 			continue
 		}
-		envs, err := client.environmentsForRevision(proxy, rev)
-		if err != nil {
-			envs = nil
-		}
+		envs, envErr := client.environmentsForRevision(proxy, rev)
 		if len(envs) == 0 {
 			if allEnvs, listErr := client.listEnvironments(); listErr == nil {
 				envs = allEnvs
+			} else if envErr == nil {
+				envErr = fmt.Errorf("list environments: %w", listErr)
 			}
 		}
 		for _, endpoint := range endpoints {
@@ -253,6 +254,8 @@ func CollectProxyEndpoints(opts CollectProxyEndpointsOptions) ([]ProxyEndpointRe
 				Proxy:     proxy,
 				Revision:  rev,
 				BasePaths: uniqueBasePaths(endpoints),
+				Envs:      envs,
+				EnvError:  errString(envErr),
 				Matched:   len(endpoints) > 0,
 			})
 		}
@@ -287,6 +290,13 @@ func uniqueBasePaths(endpoints []bundleEndpoint) []string {
 		result = append(result, base)
 	}
 	return result
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // CollectTargetServers fetches target server details for environments referenced by the endpoints.

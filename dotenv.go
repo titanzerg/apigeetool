@@ -57,11 +57,10 @@ func parseDotEnvFile(path string) error {
 		if key == "" {
 			continue
 		}
-		if _, exists := os.LookupEnv(key); exists {
-			continue
-		}
-		if err := os.Setenv(key, value); err != nil {
-			return fmt.Errorf("set %s: %w", key, err)
+		if current, exists := os.LookupEnv(key); !exists || strings.TrimSpace(current) == "" {
+			if err := os.Setenv(key, value); err != nil {
+				return fmt.Errorf("set %s: %w", key, err)
+			}
 		}
 	}
 	return scanner.Err()

@@ -127,7 +127,14 @@ func main() {
 			if len(p.BasePaths) > 0 {
 				basePaths = strings.Join(p.BasePaths, ", ")
 			}
-			fmt.Printf("[%d/%d] %s (rev %d) basepaths: %s\n", p.Index, p.Total, p.Proxy, p.Revision, basePaths)
+			envs := "<none>"
+			if len(p.Envs) > 0 {
+				envs = strings.Join(p.Envs, ", ")
+			}
+			if p.EnvError != "" {
+				envs = fmt.Sprintf("%s (env error: %s)", envs, p.EnvError)
+			}
+			fmt.Printf("[%d/%d] %s (rev %d) basepaths: %s envs: %s\n", p.Index, p.Total, p.Proxy, p.Revision, basePaths, envs)
 		}
 
 		endpoints, err := apigee.CollectProxyEndpoints(apigee.CollectProxyEndpointsOptions{

@@ -263,13 +263,9 @@ func (c *Client) environmentsForRevision(proxy string, revision int) ([]string, 
 		url.PathEscape(proxy),
 	)
 
-	type revisionInfo struct {
-		Name  string `json:"name"`
-		State string `json:"state"`
-	}
 	type deployment struct {
-		Environment string         `json:"environment"`
-		Revision    []revisionInfo `json:"revision"`
+		Environment string          `json:"environment"`
+		Revision    json.RawMessage `json:"revision"`
 	}
 	var payload struct {
 		Deployments []deployment `json:"deployments"`
@@ -285,17 +281,92 @@ func (c *Client) environmentsForRevision(proxy string, revision int) ([]string, 
 		return nil, fmt.Errorf("decode deployments: %w", err)
 	}
 
+	seen := make(map[string]struct{})
 	var envs []string
 	for _, dep := range payload.Deployments {
-		for _, rev := range dep.Revision {
+		env := strings.TrimSpace(dep.Environment)
+		if env != "" {
+			seen[env] = struct{}{}
+		}
+		for _, rev := range parseRevisionEntries(dep.Revision) {
 			num, _ := strconv.Atoi(strings.TrimSpace(rev.Name))
-			if num == revision && strings.EqualFold(strings.TrimSpace(rev.State), "deployed") {
-				envs = append(envs, strings.TrimSpace(dep.Environment))
-				break
+			if num == revision {
+				state := strings.TrimSpace(strings.ToLower(rev.State))
+				if state == "" || state == "deployed" {
+					envs = append(envs, env)
+					break
+				}
 			}
 		}
 	}
+	if len(envs) == 0 && len(seen) > 0 {
+		for env := range seen {
+			if env == "" {
+				continue
+			}
+			envs = append(envs, env)
+		}
+	}
 	return envs, nil
+}
+
+type revisionEntry struct {
+	Name  string
+	State string
+}
+
+func parseRevisionEntries(raw json.RawMessage) []revisionEntry {
+	if len(raw) == 0 {
+		return nil
+	}
+	var items []json.RawMessage
+	if raw[0] == '[' {
+		if err := json.Unmarshal(raw, &items); err != nil {
+			// fallback: treat whole value as single entry
+			if rev, ok := parseRevisionEntry(raw); ok {
+				return []revisionEntry{rev}
+			}
+			return nil
+		}
+	} else {
+		items = append(items, raw)
+	}
+
+	var result []revisionEntry
+	for _, item := range items {
+		if rev, ok := parseRevisionEntry(item); ok {
+			result = append(result, rev)
+		}
+	}
+	return result
+}
+
+func parseRevisionEntry(raw json.RawMessage) (revisionEntry, bool) {
+	if len(raw) == 0 {
+		return revisionEntry{}, false
+	}
+
+	// String or number: revision only
+	if raw[0] == '"' || raw[0] == '\'' || (raw[0] >= '0' && raw[0] <= '9') {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return revisionEntry{Name: s}, true
+		}
+	}
+
+	// Object with name/state
+	var obj struct {
+		Name  string `json:"name"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		if strings.TrimSpace(obj.Name) == "" {
+			return revisionEntry{}, false
+		}
+		return revisionEntry{Name: obj.Name, State: obj.State}, true
+	}
+
+	return revisionEntry{}, false
 }
 
 func (c *Client) listEnvironments() ([]string, error) {
