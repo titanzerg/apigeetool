@@ -43,6 +43,7 @@ func main() {
 		syncSSLRoot        = flag.String("sync-ssl-rootcert", "", "Path to CA certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_ROOTCERT)")
 		syncSSLCert        = flag.String("sync-ssl-cert", "", "Path to client certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_CERT)")
 		syncSSLKey         = flag.String("sync-ssl-key", "", "Path to client key for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_KEY)")
+		syncProductsTable  = flag.String("sync-products-table", "apigee.apigee_api_products", "Target PostgreSQL table for API products (sync mode)")
 	)
 
 	flag.Parse()
@@ -178,6 +179,20 @@ func main() {
 			log.Fatalf("sync target servers to PostgreSQL: %v", err)
 		}
 		fmt.Printf("Updated %d target server(s) in %s\n", len(tsRecords), targetTable)
+
+		products, err := apigee.CollectAPIProducts(apigee.CollectAPIProductsOptions{
+			Host:  host,
+			Org:   org,
+			Token: token,
+		})
+		if err != nil {
+			log.Fatalf("collect api products: %v", err)
+		}
+		fmt.Printf("Fetched %d api product(s) from Apigee\n", len(products))
+		if err := syncAPIProducts(context.Background(), dbOpts, strings.TrimSpace(*syncProductsTable), products); err != nil {
+			log.Fatalf("sync api products to PostgreSQL: %v", err)
+		}
+		fmt.Printf("Updated %d api product(s) in %s\n", len(products), strings.TrimSpace(*syncProductsTable))
 		return
 	}
 

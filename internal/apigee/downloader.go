@@ -646,9 +646,10 @@ func (c *Client) doRequestAny(method, endpoint, accept string) (*http.Response, 
 }
 
 type nameContainer struct {
-	Proxies []nameItem `json:"proxies"`
-	Items   []nameItem `json:"items"`
-	APIs    []nameItem `json:"apis"`
+	Proxies     []nameItem `json:"proxies"`
+	Items       []nameItem `json:"items"`
+	APIs        []nameItem `json:"apis"`
+	APIProducts []nameItem `json:"apiProduct"`
 }
 
 type nameItem struct {
@@ -666,6 +667,7 @@ func decodeNameList(data []byte) ([]string, error) {
 		names := collectNames(container.Proxies)
 		names = append(names, collectNames(container.Items)...)
 		names = append(names, collectNames(container.APIs)...)
+		names = append(names, collectNames(container.APIProducts)...)
 		if len(names) > 0 {
 			return names, nil
 		}
@@ -673,7 +675,7 @@ func decodeNameList(data []byte) ([]string, error) {
 
 	var keyed map[string][]string
 	if err := json.Unmarshal(data, &keyed); err == nil {
-		for _, key := range []string{"apis", "items", "proxies"} {
+		for _, key := range []string{"apis", "items", "proxies", "apiProduct"} {
 			if names := keyed[key]; len(names) > 0 {
 				return names, nil
 			}

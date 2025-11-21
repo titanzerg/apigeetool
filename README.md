@@ -125,6 +125,15 @@ CREATE TABLE apigee.apigee_target_servers (
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (environment, name)
 );
+
+CREATE TABLE apigee.apigee_api_products (
+  name text NOT NULL,
+  environments text[] NOT NULL DEFAULT '{}',
+  apiproxies text[] NOT NULL DEFAULT '{}',
+  apps text[] NOT NULL DEFAULT '{}',
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (name)
+);
 ```
 
 ต้องให้สิทธิ์บัญชีที่ใช้เชื่อมต่อสามารถ `DELETE` + `INSERT` กับตารางดังกล่าว

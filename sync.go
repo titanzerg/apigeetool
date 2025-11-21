@@ -117,6 +117,62 @@ func syncTargetServers(ctx context.Context, dbOpts dbConnOptions, table string, 
 	return nil
 }
 
+func syncAPIProducts(ctx context.Context, dbOpts dbConnOptions, table string, products []apigee.APIProductRecord) error {
+	quotedTable, err := quoteTableName(table)
+	if err != nil {
+		return err
+	}
+
+	dbURL, err := buildDatabaseURL(dbOpts)
+	if err != nil {
+		return err
+	}
+
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		return fmt.Errorf("connect to postgres: %w", err)
+	}
+	defer pool.Close()
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, "DELETE FROM "+quotedTable); err != nil {
+		return fmt.Errorf("clear %s: %w", quotedTable, err)
+	}
+
+	insertSQL := fmt.Sprintf(
+		"INSERT INTO %s (name, environments, apiproxies, apps, updated_at) VALUES ($1, $2, $3, $4, $5)",
+		quotedTable,
+	)
+	now := time.Now().UTC()
+	for _, prod := range products {
+		envs := prod.Environments
+		if envs == nil {
+			envs = []string{}
+		}
+		proxies := prod.Proxies
+		if proxies == nil {
+			proxies = []string{}
+		}
+		apps := prod.Apps
+		if apps == nil {
+			apps = []string{}
+		}
+		if _, err := tx.Exec(ctx, insertSQL, prod.Name, envs, proxies, apps, now); err != nil {
+			return fmt.Errorf("insert api product %s: %w", prod.Name, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
 func quoteTableName(table string) (string, error) {
 	table = strings.TrimSpace(table)
 	if table == "" {
