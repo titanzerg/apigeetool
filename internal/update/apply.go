@@ -3,6 +3,7 @@ package update
 import (
 	"bufio"
 	"bytes"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
@@ -25,8 +26,7 @@ func ReplaceProxyEndpoint(generatedPath, targetPath string) error {
 		return err
 	}
 
-	genSegment, err := locateFlowsSegment(genData)
-	if err != nil {
+	if _, err := locateFlowsSegment(genData); err != nil {
 		return fmt.Errorf("generated ProxyEndpoint missing <Flows>: %w", err)
 	}
 	targetSegment, err := locateFlowsSegment(targetData)
@@ -34,17 +34,66 @@ func ReplaceProxyEndpoint(generatedPath, targetPath string) error {
 		return fmt.Errorf("target ProxyEndpoint missing <Flows>: %w", err)
 	}
 
-	merged := preserveSpecialFlows(genSegment.Inner, targetSegment.Inner)
+	generatedFlows, err := parseFlowDetails(genData)
+	if err != nil {
+		return fmt.Errorf("parse generated ProxyEndpoint flows: %w", err)
+	}
+	targetFlows, err := parseFlowDetails(targetData)
+	if err != nil {
+		return fmt.Errorf("parse target ProxyEndpoint flows: %w", err)
+	}
+
+	targetFlowMap := make(map[string]flowDetails, len(targetFlows))
+	for _, fl := range targetFlows {
+		targetFlowMap[fl.Name] = fl
+	}
+
+	reqTemplate, respTemplate := mostCommonReqResp(targetFlows)
+	if !reqTemplate.Present {
+		reqTemplate = newEmptyElement("Request")
+	}
+	if !respTemplate.Present {
+		respTemplate = newEmptyElement("Response")
+	}
+
+	generatedNames := make(map[string]struct{}, len(generatedFlows))
+	var merged bytes.Buffer
+
+	for _, fl := range generatedFlows {
+		generatedNames[fl.Name] = struct{}{}
+		req := reqTemplate
+		resp := respTemplate
+		if existing, ok := targetFlowMap[fl.Name]; ok {
+			if existing.Request.Present {
+				req = existing.Request
+			}
+			if existing.Response.Present {
+				resp = existing.Response
+			}
+		}
+		merged.WriteString(renderFlow(fl.Name, fl.Description, fl.Condition, req, resp))
+	}
+
+	if _, exists := generatedNames["NotFound"]; !exists {
+		if nf, ok := targetFlowMap["NotFound"]; ok {
+			merged.WriteString(renderFlow(nf.Name, nf.Description, nf.Condition, nf.Request, nf.Response))
+		}
+	}
 
 	var buf bytes.Buffer
-	buf.Grow(len(targetData) - (targetSegment.End - targetSegment.Start) + len(merged))
+	buf.Grow(len(targetData) - (targetSegment.End - targetSegment.Start) + merged.Len())
 	buf.Write(targetData[:targetSegment.Start])
 	buf.Write(targetSegment.OpenTag)
-	buf.Write(merged)
+	buf.Write(merged.Bytes())
 	buf.Write(targetSegment.CloseTag)
 	buf.Write(targetData[targetSegment.End:])
 
-	return os.WriteFile(targetPath, buf.Bytes(), 0o644)
+	formatted, err := formatXML(buf.Bytes())
+	if err != nil {
+		return fmt.Errorf("format merged ProxyEndpoint: %w", err)
+	}
+
+	return os.WriteFile(targetPath, formatted, 0o644)
 }
 
 func confirmApply(in io.Reader, out io.Writer) (bool, error) {
@@ -110,86 +159,223 @@ func locateFlowsSegment(data []byte) (flowsSegment, error) {
 	}, nil
 }
 
-func preserveSpecialFlows(generatedInner, targetInner []byte) []byte {
-	result := append([]byte(nil), generatedInner...)
-	if !flowExists(result, "NotFound") {
-		if block := extractFlowBlock(targetInner, "NotFound"); len(block) > 0 {
-			result = appendFlowBlock(result, block)
-		}
-	}
-	return result
+type flowDetails struct {
+	Name        string      `xml:"name,attr"`
+	Description string      `xml:"Description"`
+	Request     flowElement `xml:"Request"`
+	Response    flowElement `xml:"Response"`
+	Condition   string      `xml:"Condition"`
 }
 
-func flowExists(data []byte, name string) bool {
-	patterns := []string{
-		fmt.Sprintf(`name="%s"`, name),
-		fmt.Sprintf(`name='%s'`, name),
-	}
-	lower := strings.ToLower(string(data))
-	for _, pattern := range patterns {
-		if strings.Contains(lower, strings.ToLower(pattern)) {
-			return true
-		}
-	}
-	return false
+type flowElement struct {
+	Start    xml.StartElement
+	InnerXML string
+	Present  bool
 }
 
-func extractFlowBlock(data []byte, name string) []byte {
-	if len(data) == 0 {
-		return nil
+func (e *flowElement) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	e.Present = true
+	e.Start = start
+	var inner struct {
+		Data string `xml:",innerxml"`
 	}
-	source := string(data)
-	lower := strings.ToLower(source)
-	patterns := []string{
-		fmt.Sprintf(`<flow name="%s"`, strings.ToLower(name)),
-		fmt.Sprintf(`<flow name='%s'`, strings.ToLower(name)),
+	if err := d.DecodeElement(&inner, &start); err != nil {
+		return err
 	}
-	start := -1
-	for _, pattern := range patterns {
-		if idx := strings.Index(lower, pattern); idx >= 0 {
-			start = idx
-			break
+	e.InnerXML = inner.Data
+	return nil
+}
+
+func parseFlowDetails(data []byte) ([]flowDetails, error) {
+	var doc struct {
+		Flows []flowDetails `xml:"Flows>Flow"`
+	}
+	if err := xml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	for i := range doc.Flows {
+		doc.Flows[i].Name = strings.TrimSpace(doc.Flows[i].Name)
+		doc.Flows[i].Description = strings.TrimSpace(doc.Flows[i].Description)
+		doc.Flows[i].Condition = strings.TrimSpace(doc.Flows[i].Condition)
+	}
+	return doc.Flows, nil
+}
+
+func mostCommonReqResp(flows []flowDetails) (flowElement, flowElement) {
+	type combo struct {
+		count    int
+		request  flowElement
+		response flowElement
+	}
+	combos := make(map[string]combo)
+	for _, fl := range flows {
+		key := strings.TrimSpace(fl.Request.InnerXML) + "|" + strings.TrimSpace(fl.Response.InnerXML)
+		entry := combos[key]
+		entry.count++
+		if entry.count == 1 {
+			entry.request = fl.Request
+			entry.response = fl.Response
+		}
+		combos[key] = entry
+	}
+	var (
+		bestKey   string
+		bestCount int
+	)
+	for key, entry := range combos {
+		if entry.count > bestCount {
+			bestKey = key
+			bestCount = entry.count
 		}
 	}
-	if start < 0 {
-		return nil
+	if bestKey == "" {
+		return flowElement{}, flowElement{}
 	}
+	best := combos[bestKey]
+	return best.request, best.response
+}
 
-	for start > 0 {
-		if source[start-1] == ' ' || source[start-1] == '\t' {
-			start--
+func renderFlow(name, description, condition string, req, resp flowElement) string {
+	flowIndent := "        "
+	childIndent := flowIndent + "    "
+	var buf strings.Builder
+	buf.WriteString(flowIndent)
+	buf.WriteString("<Flow name=\"")
+	buf.WriteString(escapeAttr(name))
+	buf.WriteString("\">\n")
+	buf.WriteString(childIndent)
+	buf.WriteString("<Description>")
+	buf.WriteString(escapeText(description))
+	buf.WriteString("</Description>\n")
+	buf.WriteString(renderElement("Request", req, childIndent))
+	buf.WriteByte('\n')
+	buf.WriteString(renderElement("Response", resp, childIndent))
+	buf.WriteByte('\n')
+	buf.WriteString(childIndent)
+	buf.WriteString("<Condition>")
+	buf.WriteString(escapeText(condition))
+	buf.WriteString("</Condition>\n")
+	buf.WriteString(flowIndent)
+	buf.WriteString("</Flow>\n")
+	return buf.String()
+}
+
+func renderElement(defaultName string, el flowElement, parentIndent string) string {
+	name := defaultName
+	if el.Start.Name.Local != "" {
+		name = el.Start.Name.Local
+	}
+	attrs := renderAttributes(el.Start.Attr)
+	content := strings.TrimSpace(el.InnerXML)
+	if content == "" {
+		return fmt.Sprintf("%s<%s%s/>", parentIndent, name, attrs)
+	}
+	content = reindentInnerXML(content, parentIndent+"    ")
+	return fmt.Sprintf("%s<%s%s>\n%s\n%s</%s>", parentIndent, name, attrs, content, parentIndent, name)
+}
+
+func renderAttributes(attrs []xml.Attr) string {
+	if len(attrs) == 0 {
+		return ""
+	}
+	var buf strings.Builder
+	for _, attr := range attrs {
+		buf.WriteByte(' ')
+		if attr.Name.Space != "" {
+			buf.WriteString(attr.Name.Space)
+			buf.WriteByte(':')
+		}
+		buf.WriteString(attr.Name.Local)
+		buf.WriteString(`="`)
+		buf.WriteString(escapeAttr(attr.Value))
+		buf.WriteByte('"')
+	}
+	return buf.String()
+}
+
+func newEmptyElement(tag string) flowElement {
+	return flowElement{
+		Start:   xml.StartElement{Name: xml.Name{Local: tag}},
+		Present: true,
+	}
+}
+
+func reindentInnerXML(content, indent string) string {
+	lines := strings.Split(strings.Trim(content, "\n"), "\n")
+	minIndent := -1
+	for _, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "" {
 			continue
 		}
-		if source[start-1] == '\r' || source[start-1] == '\n' {
-			start--
-			break
+		leading := len(line) - len(trimmed)
+		if minIndent == -1 || leading < minIndent {
+			minIndent = leading
 		}
-		break
 	}
-
-	rest := source[start:]
-	endRel := strings.Index(strings.ToLower(rest), "</flow>")
-	if endRel < 0 {
-		return nil
+	if minIndent < 0 {
+		minIndent = 0
 	}
-	end := start + endRel + len("</Flow>")
-
-	for end < len(source) && (source[end] == '\r' || source[end] == '\n' || source[end] == '\t' || source[end] == ' ') {
-		end++
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			lines[i] = indent
+			continue
+		}
+		if len(line) >= minIndent {
+			line = line[minIndent:]
+		}
+		lines[i] = indent + line
 	}
-
-	block := source[start:end]
-	return []byte(block)
+	return strings.Join(lines, "\n")
 }
 
-func appendFlowBlock(existing, block []byte) []byte {
-	existing = append([]byte(nil), existing...)
-	if len(bytes.TrimSpace(existing)) > 0 && !bytes.HasSuffix(existing, []byte("\n")) {
-		existing = append(existing, '\n')
+func formatXML(raw []byte) ([]byte, error) {
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	dec.Strict = false
+
+	var buf bytes.Buffer
+	enc := xml.NewEncoder(&buf)
+	enc.Indent("", "    ")
+
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case xml.CharData:
+			// Drop purely whitespace-only text nodes to avoid double-blank lines.
+			if strings.TrimSpace(string(t)) == "" {
+				continue
+			}
+			trimmed := xml.CharData(strings.TrimSpace(string(t)))
+			if err := enc.EncodeToken(trimmed); err != nil {
+				return nil, err
+			}
+		default:
+			if err := enc.EncodeToken(tok); err != nil {
+				return nil, err
+			}
+		}
 	}
-	existing = append(existing, block...)
-	if !bytes.HasSuffix(existing, []byte("\n")) {
-		existing = append(existing, '\n')
+	if err := enc.Flush(); err != nil {
+		return nil, err
 	}
-	return existing
+	buf.WriteByte('\n')
+	return buf.Bytes(), nil
+}
+
+func escapeAttr(value string) string {
+	var buf strings.Builder
+	xml.EscapeText(&buf, []byte(value))
+	return buf.String()
+}
+
+func escapeText(value string) string {
+	var buf strings.Builder
+	xml.EscapeText(&buf, []byte(value))
+	return buf.String()
 }
