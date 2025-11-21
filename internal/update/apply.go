@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const indentUnit = "  "
+
 // ConfirmApply prompts the user to confirm whether the downloaded ProxyEndpoint should be updated.
 func ConfirmApply() (bool, error) {
 	return confirmApply(os.Stdin, os.Stdout)
@@ -236,8 +238,8 @@ func mostCommonReqResp(flows []flowDetails) (flowElement, flowElement) {
 }
 
 func renderFlow(name, description, condition string, req, resp flowElement) string {
-	flowIndent := "        "
-	childIndent := flowIndent + "    "
+	flowIndent := indentUnit + indentUnit + indentUnit + indentUnit
+	childIndent := flowIndent + indentUnit
 	var buf strings.Builder
 	buf.WriteString(flowIndent)
 	buf.WriteString("<Flow name=\"")
@@ -270,7 +272,7 @@ func renderElement(defaultName string, el flowElement, parentIndent string) stri
 	if content == "" {
 		return fmt.Sprintf("%s<%s%s/>", parentIndent, name, attrs)
 	}
-	content = reindentInnerXML(content, parentIndent+"    ")
+	content = reindentInnerXML(content, parentIndent+indentUnit)
 	return fmt.Sprintf("%s<%s%s>\n%s\n%s</%s>", parentIndent, name, attrs, content, parentIndent, name)
 }
 
@@ -335,7 +337,7 @@ func formatXML(raw []byte) ([]byte, error) {
 
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "    ")
+	enc.Indent("", indentUnit)
 
 	for {
 		tok, err := dec.Token()
@@ -365,7 +367,12 @@ func formatXML(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	buf.WriteByte('\n')
-	return buf.Bytes(), nil
+	out := buf.String()
+	out = strings.ReplaceAll(out, "<Request></Request>", "<Request/>")
+	out = strings.ReplaceAll(out, "<Response></Response>", "<Response/>")
+	out = strings.ReplaceAll(out, "&#34;", `"`)
+	out = strings.ReplaceAll(out, "&quot;", `"`)
+	return []byte(out), nil
 }
 
 func escapeAttr(value string) string {
