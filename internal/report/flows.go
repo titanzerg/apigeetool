@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"Apigee/internal/proxyxml"
+	"apigee/internal/proxyxml"
 )
 
 // PrintFlowDiff prints flow differences and returns true when differences exist.

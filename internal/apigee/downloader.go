@@ -16,7 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"Apigee/internal/proxyxml"
+	"apigee/internal/proxyxml"
+	"apigee/internal/util"
 )
 
 // DownloadOptions contains parameters for downloading proxy endpoints.
@@ -101,6 +102,35 @@ func NewClient(host, org, token string) *Client {
 		token:      strings.TrimSpace(token),
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// Interface methods to allow test injection without exposing internal helpers.
+func (c *Client) ListAPIs() ([]string, error) {
+	return c.listAPIs()
+}
+
+func (c *Client) LatestRevision(proxy string) (int, error) {
+	return c.latestRevision(proxy)
+}
+
+func (c *Client) FetchProxyBundle(proxy string, revision int) ([]byte, error) {
+	return c.fetchProxyBundle(proxy, revision)
+}
+
+func (c *Client) ListEnvironments() ([]string, error) {
+	return c.listEnvironments()
+}
+
+func (c *Client) EnvironmentsForRevision(proxy string, revision int) ([]string, error) {
+	return c.environmentsForRevision(proxy, revision)
+}
+
+func (c *Client) ListTargetServers(env string) ([]string, error) {
+	return c.listTargetServers(env)
+}
+
+func (c *Client) FetchTargetServer(env, name string) (TargetServerRecord, error) {
+	return c.fetchTargetServer(env, name)
 }
 
 func (c *Client) latestRevision(proxy string) (int, error) {
@@ -612,27 +642,6 @@ func targetEndpointPrefix(name string) (string, bool) {
 	return "", false
 }
 
-func mergeAndUnique(base []string, extra []string) []string {
-	result := append([]string{}, base...)
-	seen := make(map[string]struct{}, len(result))
-	for _, val := range result {
-		seen[strings.ToLower(val)] = struct{}{}
-	}
-	for _, val := range extra {
-		val = strings.TrimSpace(val)
-		if val == "" {
-			continue
-		}
-		key := strings.ToLower(val)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, val)
-	}
-	return result
-}
-
 func (c *Client) doRequestAny(method, endpoint, accept string) (*http.Response, error) {
 	req, err := http.NewRequest(method, endpoint, nil)
 	if err != nil {
@@ -756,7 +765,7 @@ func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
 				continue
 			}
 			key := strings.ToLower(targetName)
-			targetServers[key] = mergeAndUnique(targetServers[key], servers)
+			targetServers[key] = util.MergeAndUnique(targetServers[key], servers)
 			continue
 		}
 
@@ -812,7 +821,7 @@ func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
 		endpoints = append(endpoints, bundleEndpoint{
 			Name:          name,
 			BasePath:      meta.basePath,
-			TargetServers: mergeAndUnique(nil, servers),
+			TargetServers: util.MergeAndUnique(nil, servers),
 			FlowCount:     meta.flowCount,
 		})
 	}

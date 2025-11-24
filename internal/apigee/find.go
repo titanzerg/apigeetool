@@ -12,6 +12,7 @@ type FindProxyOptions struct {
 	Token    string
 	BasePath string
 	Progress func(ProxyScanProgress)
+	Client   ManagementClient
 }
 
 // ProxyMatch describes a proxy whose BasePath matched the requested value.
@@ -41,6 +42,7 @@ type CollectProxyEndpointsOptions struct {
 	Org      string
 	Token    string
 	Progress func(ProxyScanProgress)
+	Client   ManagementClient
 }
 
 // CollectTargetServersOptions controls the behavior of CollectTargetServers.
@@ -49,6 +51,7 @@ type CollectTargetServersOptions struct {
 	Org       string
 	Token     string
 	Endpoints []ProxyEndpointRecord
+	Client    ManagementClient
 }
 
 // ProxyEndpointRecord describes a ProxyEndpoint retrieved from Apigee.
@@ -79,17 +82,12 @@ func FindProxiesByBasePath(opts FindProxyOptions) ([]ProxyMatch, error) {
 		return nil, fmt.Errorf("base path is required")
 	}
 
-	org := strings.TrimSpace(opts.Org)
-	token := strings.TrimSpace(opts.Token)
-	host := strings.TrimSpace(opts.Host)
-
-	if org == "" || token == "" {
-		return nil, fmt.Errorf("Apigee org and token are required")
+	client, err := resolveClient(opts.Client, opts.Host, opts.Org, opts.Token)
+	if err != nil {
+		return nil, err
 	}
 
-	client := NewClient(host, org, token)
-
-	proxies, err := client.listAPIs()
+	proxies, err := client.ListAPIs()
 	if err != nil {
 		return nil, fmt.Errorf("list apis: %w", err)
 	}
@@ -97,7 +95,7 @@ func FindProxiesByBasePath(opts FindProxyOptions) ([]ProxyMatch, error) {
 	var matches []ProxyMatch
 	total := len(proxies)
 	for i, proxy := range proxies {
-		rev, err := client.latestRevision(proxy)
+		rev, err := client.LatestRevision(proxy)
 		if err != nil {
 			if opts.Progress != nil {
 				opts.Progress(ProxyScanProgress{
@@ -114,7 +112,7 @@ func FindProxiesByBasePath(opts FindProxyOptions) ([]ProxyMatch, error) {
 			continue
 		}
 
-		bundle, err := client.fetchProxyBundle(proxy, rev)
+		bundle, err := client.FetchProxyBundle(proxy, rev)
 		if err != nil {
 			if opts.Progress != nil {
 				opts.Progress(ProxyScanProgress{
@@ -169,16 +167,12 @@ func FindProxiesByBasePath(opts FindProxyOptions) ([]ProxyMatch, error) {
 
 // CollectProxyEndpoints fetches the latest revision for every proxy and returns all ProxyEndpoint definitions.
 func CollectProxyEndpoints(opts CollectProxyEndpointsOptions) ([]ProxyEndpointRecord, error) {
-	org := strings.TrimSpace(opts.Org)
-	token := strings.TrimSpace(opts.Token)
-	host := strings.TrimSpace(opts.Host)
-
-	if org == "" || token == "" {
-		return nil, fmt.Errorf("Apigee org and token are required")
+	client, err := resolveClient(opts.Client, opts.Host, opts.Org, opts.Token)
+	if err != nil {
+		return nil, err
 	}
 
-	client := NewClient(host, org, token)
-	proxies, err := client.listAPIs()
+	proxies, err := client.ListAPIs()
 	if err != nil {
 		return nil, fmt.Errorf("list apis: %w", err)
 	}
@@ -186,7 +180,7 @@ func CollectProxyEndpoints(opts CollectProxyEndpointsOptions) ([]ProxyEndpointRe
 	total := len(proxies)
 	var endpointsOut []ProxyEndpointRecord
 	for i, proxy := range proxies {
-		rev, err := client.latestRevision(proxy)
+		rev, err := client.LatestRevision(proxy)
 		if err != nil {
 			if opts.Progress != nil {
 				opts.Progress(ProxyScanProgress{
@@ -202,7 +196,7 @@ func CollectProxyEndpoints(opts CollectProxyEndpointsOptions) ([]ProxyEndpointRe
 		if rev == 0 {
 			continue
 		}
-		bundle, err := client.fetchProxyBundle(proxy, rev)
+		bundle, err := client.FetchProxyBundle(proxy, rev)
 		if err != nil {
 			if opts.Progress != nil {
 				opts.Progress(ProxyScanProgress{
@@ -228,9 +222,9 @@ func CollectProxyEndpoints(opts CollectProxyEndpointsOptions) ([]ProxyEndpointRe
 			}
 			continue
 		}
-		envs, envErr := client.environmentsForRevision(proxy, rev)
+		envs, envErr := client.EnvironmentsForRevision(proxy, rev)
 		if len(envs) == 0 {
-			if allEnvs, listErr := client.listEnvironments(); listErr == nil {
+			if allEnvs, listErr := client.ListEnvironments(); listErr == nil {
 				envs = allEnvs
 			} else if envErr == nil {
 				envErr = fmt.Errorf("list environments: %w", listErr)
@@ -301,14 +295,10 @@ func errString(err error) string {
 
 // CollectTargetServers fetches target server details for environments referenced by the endpoints.
 func CollectTargetServers(opts CollectTargetServersOptions) ([]TargetServerRecord, error) {
-	org := strings.TrimSpace(opts.Org)
-	token := strings.TrimSpace(opts.Token)
-	host := strings.TrimSpace(opts.Host)
-	if org == "" || token == "" {
-		return nil, fmt.Errorf("Apigee org and token are required")
+	client, err := resolveClient(opts.Client, opts.Host, opts.Org, opts.Token)
+	if err != nil {
+		return nil, err
 	}
-
-	client := NewClient(host, org, token)
 
 	envSet := make(map[string]struct{})
 	for _, ep := range opts.Endpoints {
@@ -323,12 +313,12 @@ func CollectTargetServers(opts CollectTargetServersOptions) ([]TargetServerRecor
 
 	var records []TargetServerRecord
 	for env := range envSet {
-		targetNames, err := client.listTargetServers(env)
+		targetNames, err := client.ListTargetServers(env)
 		if err != nil {
 			return nil, fmt.Errorf("list target servers in %s: %w", env, err)
 		}
 		for _, tgt := range targetNames {
-			rec, err := client.fetchTargetServer(env, tgt)
+			rec, err := client.FetchTargetServer(env, tgt)
 			if err != nil {
 				return nil, fmt.Errorf("fetch target server %s/%s: %w", env, tgt, err)
 			}

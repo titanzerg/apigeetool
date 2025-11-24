@@ -4,6 +4,8 @@ import (
 	"encoding/xml"
 	"fmt"
 	"strings"
+
+	"apigee/internal/util"
 )
 
 // ExtractRouteTargets returns TargetEndpoint names referenced in RouteRule blocks.
@@ -56,25 +58,5 @@ func ParseTargetEndpointServers(data []byte) (string, []string, error) {
 		}
 		servers = append(servers, name)
 	}
-	return strings.TrimSpace(doc.Name), uniqueStrings(servers), nil
-}
-
-func uniqueStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(values))
-	var result []string
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
+	return strings.TrimSpace(doc.Name), util.UniqueStrings(servers), nil
 }

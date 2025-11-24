@@ -6,15 +6,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
+
+	"apigee/internal/util"
 )
 
 // CollectAPIProductsOptions controls the behavior of CollectAPIProducts.
 type CollectAPIProductsOptions struct {
-	Host  string
-	Org   string
-	Token string
+	Host   string
+	Org    string
+	Token  string
+	Client ManagementClient
 }
 
 // APIProductRecord holds the minimal set of API product data to sync.
@@ -27,35 +29,31 @@ type APIProductRecord struct {
 
 // CollectAPIProducts fetches all API products along with environments, proxies, and apps.
 func CollectAPIProducts(opts CollectAPIProductsOptions) ([]APIProductRecord, error) {
-	org := strings.TrimSpace(opts.Org)
-	token := strings.TrimSpace(opts.Token)
-	host := strings.TrimSpace(opts.Host)
-
-	if org == "" || token == "" {
-		return nil, fmt.Errorf("Apigee org and token are required")
+	client, err := resolveClient(opts.Client, opts.Host, opts.Org, opts.Token)
+	if err != nil {
+		return nil, err
 	}
 
-	client := NewClient(host, org, token)
-	names, err := client.listAPIProducts()
+	names, err := client.ListAPIProducts()
 	if err != nil {
 		return nil, fmt.Errorf("list api products: %w", err)
 	}
 
 	var records []APIProductRecord
 	for _, name := range names {
-		product, err := client.fetchAPIProduct(name)
+		product, err := client.FetchAPIProduct(name)
 		if err != nil {
 			return nil, fmt.Errorf("fetch api product %s: %w", name, err)
 		}
-		apps, err := client.fetchAPIProductApps(name)
+		apps, err := client.FetchAPIProductApps(name)
 		if err != nil {
 			return nil, fmt.Errorf("fetch api product apps %s: %w", name, err)
 		}
 		records = append(records, APIProductRecord{
 			Name:         product.Name,
-			Environments: uniqueSorted(product.Environments),
-			Proxies:      uniqueSorted(product.Proxies),
-			Apps:         uniqueSorted(apps),
+			Environments: util.UniqueSortedStrings(product.Environments),
+			Proxies:      util.UniqueSortedStrings(product.Proxies),
+			Apps:         util.UniqueSortedStrings(apps),
 		})
 	}
 
@@ -146,29 +144,22 @@ func (c *Client) fetchAPIProductApps(name string) ([]string, error) {
 }
 
 func trimStrings(values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, v := range values {
-		if trimmed := strings.TrimSpace(v); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
+	return util.TrimStrings(values)
 }
 
 func uniqueSorted(values []string) []string {
-	if len(values) == 0 {
-		return values
-	}
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, v := range values {
-		lower := strings.ToLower(v)
-		if _, ok := seen[lower]; ok {
-			continue
-		}
-		seen[lower] = struct{}{}
-		out = append(out, v)
-	}
-	sort.Strings(out)
-	return out
+	return util.UniqueSortedStrings(values)
+}
+
+// Interface shims for dependency injection.
+func (c *Client) ListAPIProducts() ([]string, error) {
+	return c.listAPIProducts()
+}
+
+func (c *Client) FetchAPIProduct(name string) (apiProductDetail, error) {
+	return c.fetchAPIProduct(name)
+}
+
+func (c *Client) FetchAPIProductApps(name string) ([]string, error) {
+	return c.fetchAPIProductApps(name)
 }
