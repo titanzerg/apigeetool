@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -120,11 +121,18 @@ func (c *Client) fetchAPIProductApps(name string) ([]string, error) {
 		url.PathEscape(c.org),
 		url.PathEscape(name),
 	)
-	resp, err := c.doRequest(endpoint)
+	resp, err := c.doRequestAny(http.MethodGet, endpoint, "application/json")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return []string{}, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("apigee request failed: %s", extractError(resp))
+	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
