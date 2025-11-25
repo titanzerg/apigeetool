@@ -67,19 +67,13 @@ go run . \
 | `-targets-table` | ชื่อตาราง target servers ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_target_servers`) |
 | `-products-table` | ชื่อตาราง API products ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_api_products`) |
 | `-sync` | เปิดโหมดซิงก์ proxy endpoints จาก Apigee ไปยัง PostgreSQL (ไม่สร้างไฟล์ XML) |
-| `-sync-db-url` | PostgreSQL connection string (เช่น `postgres://user:pass@host:5432/db?sslmode=require`) ถ้าไม่ระบุจะอ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL` |
-| `-sync-endpoints-table` | ชื่อ table ที่ต้องการให้อัปเดตข้อมูล proxy endpoints (default `apigee.apigee_proxy_endpoints`) |
-| `-sync-target-table` | ชื่อ table สำหรับบันทึก target server + environment (default `apigee.apigee_target_servers`) |
-| `-sync-ssl-rootcert` | path ของไฟล์ CA certificate (`.pem`) ที่ใช้ยืนยันตัวตนเซิร์ฟเวอร์ PostgreSQL (default อ่านจาก `APIGEE_SYNC_DB_SSL_ROOTCERT`) |
-| `-sync-ssl-cert` | path ของ client certificate (ถ้าระบุจะบังคับใช้ `sslmode=require`) |
-| `-sync-ssl-key` | path ของ client private key ที่จับคู่กับ certificate ข้างต้น |
 
 ### โหมดซิงก์ข้อมูล proxy endpoints → PostgreSQL
 
-ตั้งค่า `APIGEE_ORG`/`APIGEE_TOKEN` ตามปกติ จากนั้นระบุ connection string ของ Postgres ด้วย flag `-sync-db-url` หรือ environment variables ข้างต้น แล้วสั่ง
+ตั้งค่า `APIGEE_ORG`/`APIGEE_TOKEN` ตามปกติ จากนั้นระบุ connection string ของ Postgres ด้วย flag `-db-url` หรือ environment variables ข้างต้น แล้วสั่ง
 
 ```bash
-go run . -sync -org my-org -token "$APIGEE_TOKEN" -sync-db-url postgres://...
+go run . -sync -org my-org -token "$APIGEE_TOKEN" -db-url postgres://...
 ```
 
 คำสั่งจะ
