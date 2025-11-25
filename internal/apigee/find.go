@@ -77,8 +77,8 @@ type TargetServerRecord struct {
 
 // FindProxiesByBasePath lists Apigee proxies with a matching BasePath.
 func FindProxiesByBasePath(opts FindProxyOptions) ([]ProxyMatch, error) {
-	base := normalizeBasePath(strings.TrimSpace(opts.BasePath))
-	if base == "" {
+	searchTerm := strings.TrimSpace(opts.BasePath)
+	if searchTerm == "" {
 		return nil, fmt.Errorf("base path is required")
 	}
 
@@ -140,7 +140,7 @@ func FindProxiesByBasePath(opts FindProxyOptions) ([]ProxyMatch, error) {
 		}
 		var matched bool
 		for _, endpoint := range endpoints {
-			if normalizeBasePath(endpoint.BasePath) == base {
+			if basePathContains(endpoint.BasePath, searchTerm) {
 				matched = true
 				matches = append(matches, ProxyMatch{
 					Proxy:    proxy,
@@ -276,7 +276,7 @@ func uniqueBasePaths(endpoints []bundleEndpoint) []string {
 	seen := make(map[string]struct{}, len(endpoints))
 	var result []string
 	for _, ep := range endpoints {
-		base := strings.TrimSpace(ep.BasePath)
+		base := normalizeBasePath(ep.BasePath)
 		if _, ok := seen[base]; ok {
 			continue
 		}
@@ -291,6 +291,26 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func basePathContains(target, query string) bool {
+	t := normalizeBasePathForSearch(target)
+	q := normalizeBasePathForSearch(query)
+	if t == "" || q == "" {
+		return false
+	}
+	return strings.Contains(t, q)
+}
+
+func normalizeBasePathForSearch(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if path != "/" {
+		path = strings.TrimSuffix(path, "/")
+	}
+	return strings.ToLower(path)
 }
 
 // CollectTargetServers fetches target server details for environments referenced by the endpoints.

@@ -34,16 +34,19 @@ func run() error {
 			"downloaded-proxy-endpoints",
 			"Destination directory for downloaded ProxyEndpoint XML files",
 		)
-		apigeeToken        = flag.String("token", "", "Apigee OAuth token (defaults to APIGEE_TOKEN env var)")
-		findBase           = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
-		syncFlag           = flag.Bool("sync", false, "Sync all Apigee proxy endpoints into PostgreSQL")
-		syncDBURL          = flag.String("sync-db-url", "", "PostgreSQL connection URL (defaults to APIGEE_SYNC_DB_URL or DATABASE_URL)")
-		syncEndpointsTable = flag.String("sync-endpoints-table", "apigee.apigee_proxy_endpoints", "Target PostgreSQL table for -sync (endpoints)")
-		syncTargetTable    = flag.String("sync-target-table", "apigee.apigee_target_servers", "Target PostgreSQL table for target servers (sync mode)")
-		syncSSLRoot        = flag.String("sync-ssl-rootcert", "", "Path to CA certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_ROOTCERT)")
-		syncSSLCert        = flag.String("sync-ssl-cert", "", "Path to client certificate for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_CERT)")
-		syncSSLKey         = flag.String("sync-ssl-key", "", "Path to client key for -sync DB connection (defaults to APIGEE_SYNC_DB_SSL_KEY)")
-		syncProductsTable  = flag.String("sync-products-table", "apigee.apigee_api_products", "Target PostgreSQL table for API products (sync mode)")
+		apigeeToken = flag.String("token", "", "Apigee OAuth token (defaults to APIGEE_TOKEN env var)")
+
+		dbURL     = flag.String("db-url", "", "PostgreSQL connection URL for -sync and -findproxy DB cache (defaults to APIGEE_SYNC_DB_URL or DATABASE_URL)")
+		dbSSLRoot = flag.String("db-ssl-rootcert", "", "Path to CA certificate for DB connection (defaults to APIGEE_SYNC_DB_SSL_ROOTCERT)")
+		dbSSLCert = flag.String("db-ssl-cert", "", "Path to client certificate for DB connection (defaults to APIGEE_SYNC_DB_SSL_CERT)")
+		dbSSLKey  = flag.String("db-ssl-key", "", "Path to client key for DB connection (defaults to APIGEE_SYNC_DB_SSL_KEY)")
+
+		findBase = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
+
+		syncFlag       = flag.Bool("sync", false, "Sync all Apigee proxy endpoints into PostgreSQL")
+		endpointsTable = flag.String("endpoints-table", "apigee.apigee_proxy_endpoints", "PostgreSQL table for proxy endpoints (used by -sync and -findproxy cache lookups)")
+		targetsTable   = flag.String("targets-table", "apigee.apigee_target_servers", "PostgreSQL table for target servers (sync mode)")
+		productsTable  = flag.String("products-table", "apigee.apigee_api_products", "PostgreSQL table for API products (sync mode)")
 	)
 
 	flag.Parse()
@@ -51,18 +54,25 @@ func run() error {
 	cfg := cmd.ResolveApigeeConfig(*apigeeOrg, *apigeeToken, *apigeeHost)
 
 	if targetBase := strings.TrimSpace(*findBase); targetBase != "" {
-		return cmd.RunFindProxy(cfg, targetBase)
+		return cmd.RunFindProxy(cfg, cmd.FindArgs{
+			BasePath: targetBase,
+			DBURL:    strings.TrimSpace(*dbURL),
+			Table:    strings.TrimSpace(*endpointsTable),
+			SSLRoot:  strings.TrimSpace(*dbSSLRoot),
+			SSLCert:  strings.TrimSpace(*dbSSLCert),
+			SSLKey:   strings.TrimSpace(*dbSSLKey),
+		})
 	}
 
 	if *syncFlag {
 		return cmd.RunSync(cfg, cmd.SyncArgs{
-			DBURL:          strings.TrimSpace(*syncDBURL),
-			EndpointsTable: strings.TrimSpace(*syncEndpointsTable),
-			TargetTable:    strings.TrimSpace(*syncTargetTable),
-			ProductsTable:  strings.TrimSpace(*syncProductsTable),
-			SSLRoot:        strings.TrimSpace(*syncSSLRoot),
-			SSLCert:        strings.TrimSpace(*syncSSLCert),
-			SSLKey:         strings.TrimSpace(*syncSSLKey),
+			DBURL:          strings.TrimSpace(*dbURL),
+			EndpointsTable: strings.TrimSpace(*endpointsTable),
+			TargetTable:    strings.TrimSpace(*targetsTable),
+			ProductsTable:  strings.TrimSpace(*productsTable),
+			SSLRoot:        strings.TrimSpace(*dbSSLRoot),
+			SSLCert:        strings.TrimSpace(*dbSSLCert),
+			SSLKey:         strings.TrimSpace(*dbSSLKey),
 		})
 	}
 

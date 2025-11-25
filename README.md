@@ -60,7 +60,12 @@ go run . \
 | `-revision` | ระบุ revision เฉพาะ (ถ้าไม่ใส่จะไปดึง revision ล่าสุดให้อัตโนมัติ) |
 | `-apigee-host` | base URL ของ Apigee Management API (default `https://apigee.googleapis.com`) |
 | `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints` และจะลบไฟล์เดิมทุกครั้งก่อนดาวน์โหลดใหม่) |
-| `-findproxy` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ไม่สร้างไฟล์ใหม่) |
+| `-findproxy` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ค้นหาแบบ contains, ไม่สร้างไฟล์ใหม่) |
+| `-db-url` | ใส่ PostgreSQL connection URL เพื่อใช้ทั้ง `-sync` และ `-findproxy` (default อ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL`) |
+| `-db-ssl-rootcert` / `-db-ssl-cert` / `-db-ssl-key` | ตั้งค่าไฟล์ TLS สำหรับเชื่อมต่อ DB (ใช้ร่วมทั้ง `-sync` และ `-findproxy`) default อ่านจากตัวแปร `APIGEE_SYNC_DB_SSL_*` |
+| `-endpoints-table` | ชื่อตาราง proxy endpoints ใน Postgres ใช้ร่วมทั้ง `-sync` และ `-findproxy` (default `apigee.apigee_proxy_endpoints`) |
+| `-targets-table` | ชื่อตาราง target servers ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_target_servers`) |
+| `-products-table` | ชื่อตาราง API products ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_api_products`) |
 | `-sync` | เปิดโหมดซิงก์ proxy endpoints จาก Apigee ไปยัง PostgreSQL (ไม่สร้างไฟล์ XML) |
 | `-sync-db-url` | PostgreSQL connection string (เช่น `postgres://user:pass@host:5432/db?sslmode=require`) ถ้าไม่ระบุจะอ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL` |
 | `-sync-endpoints-table` | ชื่อ table ที่ต้องการให้อัปเดตข้อมูล proxy endpoints (default `apigee.apigee_proxy_endpoints`) |
@@ -166,7 +171,17 @@ export APIGEE_TOKEN="$(gcloud auth print-access-token)"
 go run . -findproxy /marine-dashboard
 ```
 
-ระหว่างค้นหา CLI จะแสดง progress ของแต่ละ proxy ในรูปแบบ `[3/57] my-proxy (rev 12) basepaths: /foo, /bar` ถ้า base path ตรงกันจะมีบรรทัด `-> MATCH` ต่อท้าย
+สามารถใส่เพียงบางส่วนของ path เช่น `-findproxy material` เพื่อให้ค้นหาแบบ contains (case-insensitive)
+
+ระหว่างค้นหา CLI จะแสดง progress ของแต่ละ proxy ในรูปแบบ `[3/57] my-proxy (rev 12) basepaths: /foo, /bar` ถ้า base path มี substring ตรงกับที่ระบุจะมีบรรทัด `-> MATCH` ต่อท้าย
+
+ถ้าซิงก์ข้อมูล proxy endpoints ลง Postgres ไว้แล้ว สามารถค้นหาจาก cache แทนการดาวน์โหลดทีละ proxy ได้ด้วย
+
+```bash
+go run . -findproxy /marine-dashboard -db-url "$APIGEE_SYNC_DB_URL"
+```
+
+CLI จะดึงผลจากตาราง `apigee.apigee_proxy_endpoints` (หรือชื่อตารางที่ระบุ) โดยตรง ทำให้ได้ผลลัพธ์เร็วขึ้นและไม่ต้องใช้ token Apigee
 
 หลังดาวน์โหลดเสร็จ CLI จะคำนวณ similarity ระหว่างไฟล์ที่ generate (`proxy-endpoint.xml`) กับไฟล์ในโฟลเดอร์ดาวน์โหลด แล้วพิมพ์ชื่อไฟล์ที่ใกล้เคียงที่สุดพร้อมเปอร์เซ็นต์ พร้อมสรุปส่วนต่างของ flow (flow ที่เพิ่ม/หาย และ condition/description ที่ไม่ตรงกัน) เพื่อใช้ตรวจโครงสร้างได้เร็วขึ้น จากนั้นจะถามว่ายืนยันให้อัปเดตไฟล์ดาวน์โหลดให้ตรงกับไฟล์ที่ generate หรือไม่ (ตอบ `y` เพื่อเขียนทับ, กด Enter/`n` เพื่อข้าม)
 

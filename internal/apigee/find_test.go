@@ -33,3 +33,24 @@ func TestUniqueBasePaths(t *testing.T) {
 		t.Fatalf("unexpected result: %#v", got)
 	}
 }
+
+func TestBasePathContains(t *testing.T) {
+	cases := []struct {
+		target string
+		query  string
+		want   bool
+	}{
+		{"/foo/bar", "foo", true},
+		{"/foo/bar/", "/foo", true},
+		{"/foo/bar", "BAR", true},
+		{"/foo/bar", "baz", false},
+		{"/", "/", true},
+		{"", "foo", false},
+		{"/foo", "", false},
+	}
+	for _, tc := range cases {
+		if got := basePathContains(tc.target, tc.query); got != tc.want {
+			t.Fatalf("basePathContains(%q, %q)=%v, want %v", tc.target, tc.query, got, tc.want)
+		}
+	}
+}

@@ -32,6 +32,15 @@ type GenerateArgs struct {
 	DownloadDir string
 }
 
+type FindArgs struct {
+	BasePath string
+	DBURL    string
+	Table    string
+	SSLRoot  string
+	SSLCert  string
+	SSLKey   string
+}
+
 func RequireApigeeAuth(cfg ApigeeConfig, action string) error {
 	if strings.TrimSpace(cfg.Org) == "" || strings.TrimSpace(cfg.Token) == "" {
 		return fmt.Errorf("%s requires Apigee org (-org or APIGEE_ORG) and token (-token or APIGEE_TOKEN)", action)
