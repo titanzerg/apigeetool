@@ -13,6 +13,7 @@ type ApigeeConfig struct {
 }
 
 type SyncArgs struct {
+	Selection      SyncSelection
 	DBURL          string
 	EndpointsTable string
 	TargetTable    string

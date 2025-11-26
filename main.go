@@ -9,6 +9,24 @@ import (
 	"apigee/internal/cmd"
 )
 
+type syncFlagValue struct {
+	raw string
+}
+
+func (s *syncFlagValue) String() string {
+	return s.raw
+}
+
+func (s *syncFlagValue) Set(val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" || strings.EqualFold(val, "true") {
+		s.raw = "all"
+		return nil
+	}
+	s.raw = val
+	return nil
+}
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -43,12 +61,13 @@ func run() error {
 
 		findBase = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
 
-		syncFlag       = flag.Bool("sync", false, "Sync all Apigee proxy endpoints into PostgreSQL")
+		syncFlag       syncFlagValue
 		endpointsTable = flag.String("endpoints-table", "apigee.apigee_proxy_endpoints", "PostgreSQL table for proxy endpoints (used by -sync and -findproxy cache lookups)")
 		targetsTable   = flag.String("targets-table", "apigee.apigee_target_servers", "PostgreSQL table for target servers (sync mode)")
 		productsTable  = flag.String("products-table", "apigee.apigee_api_products", "PostgreSQL table for API products (sync mode)")
 	)
 
+	flag.Var(&syncFlag, "sync", "Sync Apigee data into PostgreSQL (all|apiproxy|target_server|api_product)")
 	flag.Parse()
 
 	cfg := cmd.ResolveApigeeConfig(*apigeeOrg, *apigeeToken, *apigeeHost)
@@ -64,8 +83,13 @@ func run() error {
 		})
 	}
 
-	if *syncFlag {
+	if syncValue := strings.TrimSpace(syncFlag.raw); syncValue != "" {
+		selection, err := cmd.ParseSyncSelection(syncValue)
+		if err != nil {
+			return err
+		}
 		return cmd.RunSync(cfg, cmd.SyncArgs{
+			Selection:      selection,
 			DBURL:          strings.TrimSpace(*dbURL),
 			EndpointsTable: strings.TrimSpace(*endpointsTable),
 			TargetTable:    strings.TrimSpace(*targetsTable),

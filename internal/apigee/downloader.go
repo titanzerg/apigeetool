@@ -659,10 +659,14 @@ type nameContainer struct {
 	Items       []nameItem `json:"items"`
 	APIs        []nameItem `json:"apis"`
 	APIProducts []nameItem `json:"apiProduct"`
+	Apps        []nameItem `json:"app"`
+	AppsList    []nameItem `json:"apps"`
+	AppIDs      []string   `json:"appIds"`
 }
 
 type nameItem struct {
-	Name string `json:"name"`
+	Name  string `json:"name"`
+	AppID string `json:"appId"`
 }
 
 func decodeNameList(data []byte) ([]string, error) {
@@ -677,6 +681,9 @@ func decodeNameList(data []byte) ([]string, error) {
 		names = append(names, collectNames(container.Items)...)
 		names = append(names, collectNames(container.APIs)...)
 		names = append(names, collectNames(container.APIProducts)...)
+		names = append(names, collectNames(container.Apps)...)
+		names = append(names, collectNames(container.AppsList)...)
+		names = append(names, container.AppIDs...)
 		if len(names) > 0 {
 			return names, nil
 		}
@@ -684,10 +691,24 @@ func decodeNameList(data []byte) ([]string, error) {
 
 	var keyed map[string][]string
 	if err := json.Unmarshal(data, &keyed); err == nil {
-		for _, key := range []string{"apis", "items", "proxies", "apiProduct"} {
+		for _, key := range []string{"apis", "items", "proxies", "apiProduct", "app", "apps", "appIds", "appids"} {
 			if names := keyed[key]; len(names) > 0 {
 				return names, nil
 			}
+		}
+	}
+
+	// Fallback: array of objects with name/appId/id fields.
+	var objects []map[string]interface{}
+	if err := json.Unmarshal(data, &objects); err == nil {
+		var names []string
+		for _, obj := range objects {
+			if name := extractNameish(obj); name != "" {
+				names = append(names, name)
+			}
+		}
+		if len(names) > 0 {
+			return names, nil
 		}
 	}
 
@@ -700,11 +721,26 @@ func collectNames(items []nameItem) []string {
 	}
 	names := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.Name != "" {
-			names = append(names, item.Name)
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = strings.TrimSpace(item.AppID)
+		}
+		if name != "" {
+			names = append(names, name)
 		}
 	}
 	return names
+}
+
+func extractNameish(obj map[string]interface{}) string {
+	for _, key := range []string{"name", "appId", "appID", "app_id", "app_name", "appName", "id"} {
+		if v, ok := obj[key]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
 }
 
 type bundleEndpoint struct {

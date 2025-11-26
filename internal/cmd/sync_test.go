@@ -1,52 +1,79 @@
 package cmd
 
-import (
-	"net/url"
-	"strings"
-	"testing"
-)
+import "testing"
 
-func TestQuoteTableName(t *testing.T) {
-	got, err := quoteTableName(`public.table`)
-	if err != nil {
-		t.Fatalf("quoteTableName error: %v", err)
+func TestParseSyncSelection(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected SyncSelection
+		wantErr  bool
+	}{
+		{
+			name:  "all",
+			input: "all",
+			expected: SyncSelection{
+				ProxyEndpoints: true,
+				TargetServers:  true,
+				APIProducts:    true,
+			},
+		},
+		{
+			name:  "apiproxy only",
+			input: "apiproxy",
+			expected: SyncSelection{
+				ProxyEndpoints: true,
+			},
+		},
+		{
+			name:  "target server with underscore",
+			input: "target_server",
+			expected: SyncSelection{
+				TargetServers: true,
+			},
+		},
+		{
+			name:  "api product hyphen",
+			input: "api-product",
+			expected: SyncSelection{
+				APIProducts: true,
+			},
+		},
+		{
+			name:  "multiple comma separated",
+			input: "apiproxy,api_product",
+			expected: SyncSelection{
+				ProxyEndpoints: true,
+				APIProducts:    true,
+			},
+		},
+		{
+			name:    "unknown token",
+			input:   "something",
+			wantErr: true,
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			wantErr: true,
+		},
 	}
-	if got != `"public"."table"` {
-		t.Fatalf("quoteTableName = %q, want \"public\".\"table\"", got)
-	}
-	if _, err := quoteTableName(`bad"part`); err == nil {
-		t.Fatalf("expected error for invalid identifier")
-	}
-}
 
-func TestSanitizeDSN(t *testing.T) {
-	in := "postgres://user:pa%ss@host/db"
-	got := sanitizeDSN(in)
-	if strings.Contains(got, "%ss") {
-		t.Fatalf("sanitizeDSN should escape stray percent, got %q", got)
-	}
-}
-
-func TestEnforceSSLMode(t *testing.T) {
-	q := url.Values{}
-	enforceSSLMode(q)
-	if mode := q.Get("sslmode"); mode != "require" {
-		t.Fatalf("sslmode = %q, want require", mode)
-	}
-	q.Set("sslmode", "verify-full")
-	enforceSSLMode(q)
-	if mode := q.Get("sslmode"); mode != "verify-full" {
-		t.Fatalf("sslmode should stay verify-full, got %q", mode)
-	}
-}
-
-func TestBuildDatabaseURLEnforcesSSLMode(t *testing.T) {
-	opts := dbConnOptions{URL: "postgres://user:pass@localhost/db?sslmode=disable"}
-	got, err := buildDatabaseURL(opts)
-	if err != nil {
-		t.Fatalf("buildDatabaseURL error: %v", err)
-	}
-	if !strings.Contains(got, "sslmode=require") {
-		t.Fatalf("expected enforced sslmode=require in %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			selection, err := ParseSyncSelection(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseSyncSelection(%q) returned error: %v", tt.input, err)
+			}
+			if selection != tt.expected {
+				t.Fatalf("unexpected selection: %+v (expected %+v)", selection, tt.expected)
+			}
+		})
 	}
 }

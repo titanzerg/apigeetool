@@ -66,7 +66,7 @@ go run . \
 | `-endpoints-table` | ชื่อตาราง proxy endpoints ใน Postgres ใช้ร่วมทั้ง `-sync` และ `-findproxy` (default `apigee.apigee_proxy_endpoints`) |
 | `-targets-table` | ชื่อตาราง target servers ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_target_servers`) |
 | `-products-table` | ชื่อตาราง API products ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_api_products`) |
-| `-sync` | เปิดโหมดซิงก์ proxy endpoints จาก Apigee ไปยัง PostgreSQL (ไม่สร้างไฟล์ XML) |
+| `-sync` | เปิดโหมดซิงก์ลง PostgreSQL (ไม่สร้างไฟล์ XML) เลือกได้ `all` (default เมื่อใส่ flag), `apiproxy`, `target_server`, `api_product` หรือคอมมาแยกหลายค่า |
 
 ### โหมดซิงก์ข้อมูล proxy endpoints → PostgreSQL
 
@@ -76,13 +76,16 @@ go run . \
 go run . -sync -org my-org -token "$APIGEE_TOKEN" -db-url postgres://...
 ```
 
-คำสั่งจะ
+ไม่ระบุค่าถัดจาก `-sync` จะซิงก์ทั้ง proxy endpoints, target server และ API product (เทียบเท่า `-sync=all`). ถ้าต้องการเฉพาะบางอย่างให้ระบุชื่อตามนี้ เช่น `-sync=apiproxy`, `-sync=target_server`, หรือรวมหลายรายการแบบ `-sync=apiproxy,api_product`
+
+เมื่อซิงก์ทั้งหมด (`-sync` หรือ `-sync=all`) คำสั่งจะ
 
 1. ไล่เรียก proxy ทุกตัวในองค์กร
 2. ดึง revision ล่าสุดและอ่านค่า BasePath พร้อม TargetEndpoint servers, จำนวน flows, และ environment ที่ deploy ของ ProxyEndpoint ทุกไฟล์
 3. ล้างแถวทั้งหมดในตารางเป้าหมาย
 4. ใส่ข้อมูลล่าสุด (proxy, endpoint, revision, base path, target servers, environments, flow count, updated_at) กลับลงไปใหม่ภายในการทำธุรกรรมเดียว
 5. ดึงข้อมูล target server ที่อ้างอิงในแต่ละ environment แล้วบันทึกลง table เป้าหมายสำหรับ target server แยกต่างหาก
+6. ดึงข้อมูล API product ทั้งหมดแล้วบันทึกลงตาราง API products
 
 > ระบบจะบังคับ `sslmode=require` อัตโนมัติ และจะเติมค่า `sslrootcert`, `sslcert`, `sslkey` จาก flag/ตัวแปรสภาพแวดล้อมที่ตั้งไว้ เพื่อให้เชื่อมต่อผ่าน TLS โดยใช้ไฟล์ `.pem` ที่คุณเตรียมไว้
 

@@ -11,5 +11,6 @@ type ManagementClient interface {
 	FetchTargetServer(env, name string) (TargetServerRecord, error)
 	ListAPIProducts() ([]string, error)
 	FetchAPIProduct(name string) (apiProductDetail, error)
+	ListOrganizationApps(startKey string) (orgAppsPage, error)
 	FetchAPIProductApps(name string) ([]string, error)
 }
