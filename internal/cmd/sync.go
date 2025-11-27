@@ -172,6 +172,20 @@ func RunSync(cfg ApigeeConfig, args SyncArgs) error {
 			Org:       cfg.Org,
 			Token:     cfg.Token,
 			Endpoints: endpoints,
+			Progress: func(p apigee.TargetServerProgress) {
+				if p.Total == 0 {
+					return
+				}
+				url := strings.TrimSpace(p.URL)
+				if url == "" {
+					url = "<unknown>"
+				}
+				if p.Err != nil {
+					fmt.Printf("[%d/%d] target %s/%s url: %s error: %v\n", p.Index, p.Total, p.Environment, p.Name, url, p.Err)
+					return
+				}
+				fmt.Printf("[%d/%d] target %s/%s url: %s\n", p.Index, p.Total, p.Environment, p.Name, url)
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("collect target servers: %w", err)

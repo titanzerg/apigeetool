@@ -3,6 +3,8 @@ package apigee
 import (
 	"fmt"
 	"strings"
+
+	"apigee/internal/util"
 )
 
 // FindProxyOptions contains search parameters for locating proxies by BasePath.
@@ -52,6 +54,17 @@ type CollectTargetServersOptions struct {
 	Token     string
 	Endpoints []ProxyEndpointRecord
 	Client    ManagementClient
+	Progress  func(TargetServerProgress)
+}
+
+// TargetServerProgress describes progress while fetching target servers.
+type TargetServerProgress struct {
+	Index       int
+	Total       int
+	Environment string
+	Name        string
+	URL         string
+	Err         error
 }
 
 // ProxyEndpointRecord describes a ProxyEndpoint retrieved from Apigee.
@@ -331,18 +344,57 @@ func CollectTargetServers(opts CollectTargetServersOptions) ([]TargetServerRecor
 		}
 	}
 
-	var records []TargetServerRecord
+	var envs []string
 	for env := range envSet {
+		envs = append(envs, env)
+	}
+	envs = util.UniqueSortedStrings(envs)
+
+	envTargets := make(map[string][]string, len(envs))
+	var total int
+	for _, env := range envs {
 		targetNames, err := client.ListTargetServers(env)
 		if err != nil {
+			if opts.Progress != nil {
+				opts.Progress(TargetServerProgress{
+					Environment: env,
+					Err:         fmt.Errorf("list target servers: %w", err),
+				})
+			}
 			return nil, fmt.Errorf("list target servers in %s: %w", env, err)
 		}
-		for _, tgt := range targetNames {
+		envTargets[env] = targetNames
+		total += len(targetNames)
+	}
+
+	var index int
+	var records []TargetServerRecord
+	for _, env := range envs {
+		for _, tgt := range envTargets[env] {
+			index++
 			rec, err := client.FetchTargetServer(env, tgt)
 			if err != nil {
+				if opts.Progress != nil {
+					opts.Progress(TargetServerProgress{
+						Index:       index,
+						Total:       total,
+						Environment: env,
+						Name:        tgt,
+						Err:         err,
+					})
+				}
 				return nil, fmt.Errorf("fetch target server %s/%s: %w", env, tgt, err)
 			}
 			records = append(records, rec)
+			if opts.Progress != nil {
+				opts.Progress(TargetServerProgress{
+					Index:       index,
+					Total:       total,
+					Environment: env,
+					Name:        rec.Name,
+					URL:         rec.URL,
+				})
+			}
 		}
 	}
 	return records, nil
