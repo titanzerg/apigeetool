@@ -54,13 +54,13 @@ go run . \
 
 | Flag | คำอธิบาย |
 | --- | --- |
-| `-proxy` | ชื่อ API Proxy บน Apigee ที่ต้องการดาวน์โหลด ProxyEndpoint ทั้งหมด |
+| `-proxy` / `-p` | ชื่อ API Proxy บน Apigee ที่ต้องการดาวน์โหลด ProxyEndpoint ทั้งหมด |
 | `-org` | ชื่อ organization (ถ้าไม่ใส่ จะอ่านจาก env `APIGEE_ORG`) |
 | `-token` | Bearer token เพื่อเรียก Management API (ถ้าไม่ใส่ จะอ่านจาก env `APIGEE_TOKEN`) |
 | `-revision` | ระบุ revision เฉพาะ (ถ้าไม่ใส่จะไปดึง revision ล่าสุดให้อัตโนมัติ) |
 | `-apigee-host` | base URL ของ Apigee Management API (default `https://apigee.googleapis.com`) |
 | `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints` และจะลบไฟล์เดิมทุกครั้งก่อนดาวน์โหลดใหม่) |
-| `-findproxy` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ค้นหาแบบ contains, ไม่สร้างไฟล์ใหม่) |
+| `-findproxy` / `-f` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ค้นหาแบบ contains, ไม่สร้างไฟล์ใหม่) |
 | `-db-url` | ใส่ PostgreSQL connection URL เพื่อใช้ทั้ง `-sync` และ `-findproxy` (default อ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL`) |
 | `-db-ssl-rootcert` / `-db-ssl-cert` / `-db-ssl-key` | ตั้งค่าไฟล์ TLS สำหรับเชื่อมต่อ DB (ใช้ร่วมทั้ง `-sync` และ `-findproxy`) default อ่านจากตัวแปร `APIGEE_SYNC_DB_SSL_*` |
 | `-endpoints-table` | ชื่อตาราง proxy endpoints ใน Postgres ใช้ร่วมทั้ง `-sync` และ `-findproxy` (default `apigee.apigee_proxy_endpoints`) |

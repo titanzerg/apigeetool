@@ -67,6 +67,8 @@ func run() error {
 		productsTable  = flag.String("products-table", "apigee.apigee_api_products", "PostgreSQL table for API products (sync mode)")
 	)
 
+	flag.StringVar(proxyName, "p", "", "alias for -proxy")
+	flag.StringVar(findBase, "f", "", "alias for -findproxy")
 	flag.Var(&syncFlag, "sync", "Sync Apigee data into PostgreSQL (all|apiproxy|target_server|api_product)")
 	flag.Parse()
 
