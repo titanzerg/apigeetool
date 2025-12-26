@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"apigee/internal/cmd"
@@ -65,10 +66,12 @@ func run() error {
 		endpointsTable = flag.String("endpoints-table", "apigee.apigee_proxy_endpoints", "PostgreSQL table for proxy endpoints (used by -sync and -findproxy cache lookups)")
 		targetsTable   = flag.String("targets-table", "apigee.apigee_target_servers", "PostgreSQL table for target servers (sync mode)")
 		productsTable  = flag.String("products-table", "apigee.apigee_api_products", "PostgreSQL table for API products (sync mode)")
+		compareMode    = flag.Bool("compare", false, "Compare two Apigee proxy revisions (requires -proxy and two revision numbers)")
 	)
 
 	flag.StringVar(proxyName, "p", "", "alias for -proxy")
 	flag.StringVar(findBase, "f", "", "alias for -findproxy")
+	flag.BoolVar(compareMode, "c", false, "alias for -compare")
 	flag.Var(&syncFlag, "sync", "Sync Apigee data into PostgreSQL (all|apiproxy|target_server|api_product)")
 	flag.Parse()
 
@@ -99,6 +102,27 @@ func run() error {
 			SSLRoot:        strings.TrimSpace(*dbSSLRoot),
 			SSLCert:        strings.TrimSpace(*dbSSLCert),
 			SSLKey:         strings.TrimSpace(*dbSSLKey),
+		})
+	}
+
+	if *compareMode {
+		args := flag.Args()
+		if len(args) != 2 {
+			return fmt.Errorf("compare requires exactly two revision numbers (e.g. -c 2 1)")
+		}
+		revA, err := strconv.Atoi(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid revision %q", args[0])
+		}
+		revB, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("invalid revision %q", args[1])
+		}
+		return cmd.RunCompare(cfg, cmd.CompareArgs{
+			ProxyName:   strings.TrimSpace(*proxyName),
+			RevisionA:   revA,
+			RevisionB:   revB,
+			DownloadDir: strings.TrimSpace(*downloadDir),
 		})
 	}
 

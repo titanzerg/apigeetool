@@ -28,44 +28,42 @@ type DownloadOptions struct {
 	Token     string
 	Revision  int
 	OutputDir string
+	Quiet     bool
+	// Artifact selection for DownloadProxyArtifacts.
+	IncludeProxyEndpoints  bool
+	IncludeTargetEndpoints bool
+	IncludeResources       bool
+	PreserveStructure      bool
 }
 
 // DownloadProxyEndpoints downloads the selected Apigee proxy bundle and writes ProxyEndpoint XML files locally.
 func DownloadProxyEndpoints(opts DownloadOptions) error {
-	proxy := strings.TrimSpace(opts.Proxy)
-	if proxy == "" {
-		return fmt.Errorf("proxy name is required when -proxy flag is used")
-	}
-
-	org := strings.TrimSpace(opts.Org)
-	if org == "" {
-		return fmt.Errorf("Apigee organization is required (set -org or APIGEE_ORG)")
-	}
-
-	token := strings.TrimSpace(opts.Token)
-	if token == "" {
-		return fmt.Errorf("Apigee OAuth token is required (set -token or APIGEE_TOKEN)")
-	}
-
-	client := NewClient(opts.Host, org, token)
-
-	rev := opts.Revision
-	if rev <= 0 {
-		latest, err := client.latestRevision(proxy)
-		if err != nil {
-			return fmt.Errorf("resolve latest revision: %w", err)
-		}
-		if latest == 0 {
-			return fmt.Errorf("no revisions found for proxy %s", proxy)
-		}
-		rev = latest
-	}
-
-	fmt.Printf("Downloading Apigee proxy %s revision %d...\n", proxy, rev)
-
-	bundle, err := client.fetchProxyBundle(proxy, rev)
+	bundle, _, err := downloadProxyBundle(opts)
 	if err != nil {
-		return fmt.Errorf("fetch proxy bundle: %w", err)
+		return err
+	}
+	dir := strings.TrimSpace(opts.OutputDir)
+	if dir == "" {
+		dir = "."
+	}
+
+	count, err := writeProxyArtifacts(bundle, dir, extractOptions{
+		IncludeProxyEndpoints: true,
+	})
+	if err != nil {
+		return err
+	}
+	if !opts.Quiet {
+		fmt.Printf("Saved %d ProxyEndpoint file(s) to %s\n", count, dir)
+	}
+	return nil
+}
+
+// DownloadProxyArtifacts downloads a proxy bundle and writes selected artifacts locally.
+func DownloadProxyArtifacts(opts DownloadOptions) error {
+	bundle, _, err := downloadProxyBundle(opts)
+	if err != nil {
+		return err
 	}
 
 	dir := strings.TrimSpace(opts.OutputDir)
@@ -73,12 +71,24 @@ func DownloadProxyEndpoints(opts DownloadOptions) error {
 		dir = "."
 	}
 
-	count, err := writeProxyEndpoints(bundle, dir)
+	selection := extractOptions{
+		IncludeProxyEndpoints:  opts.IncludeProxyEndpoints,
+		IncludeTargetEndpoints: opts.IncludeTargetEndpoints,
+		IncludeResources:       opts.IncludeResources,
+		PreserveStructure:      opts.PreserveStructure,
+	}
+	if !selection.IncludeProxyEndpoints && !selection.IncludeTargetEndpoints && !selection.IncludeResources {
+		selection.IncludeProxyEndpoints = true
+	}
+
+	count, err := writeProxyArtifacts(bundle, dir, selection)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Saved %d ProxyEndpoint file(s) to %s\n", count, dir)
+	if !opts.Quiet {
+		fmt.Printf("Saved %d artifact file(s) to %s\n", count, dir)
+	}
 	return nil
 }
 
@@ -483,7 +493,14 @@ func extractError(resp *http.Response) string {
 	return fmt.Sprintf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
 }
 
-func writeProxyEndpoints(bundle []byte, dir string) (int, error) {
+type extractOptions struct {
+	IncludeProxyEndpoints  bool
+	IncludeTargetEndpoints bool
+	IncludeResources       bool
+	PreserveStructure      bool
+}
+
+func writeProxyArtifacts(bundle []byte, dir string, opts extractOptions) (int, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return 0, fmt.Errorf("create output dir: %w", err)
 	}
@@ -497,7 +514,7 @@ func writeProxyEndpoints(bundle []byte, dir string) (int, error) {
 	var written int
 	for _, file := range zipReader.File {
 		name := file.Name
-		prefix, ok := proxyEndpointPrefix(name)
+		kind, prefix, ok := classifyArtifact(name, opts)
 		if !ok {
 			continue
 		}
@@ -505,11 +522,12 @@ func writeProxyEndpoints(bundle []byte, dir string) (int, error) {
 		if file.FileInfo().IsDir() {
 			continue
 		}
-		if !strings.HasSuffix(strings.ToLower(name), ".xml") {
+
+		if kind != artifactResource && !strings.HasSuffix(strings.ToLower(name), ".xml") {
 			continue
 		}
 
-		rel := strings.TrimPrefix(name, prefix)
+		rel := buildArtifactRelPath(name, prefix, opts.PreserveStructure)
 		outPath := filepath.Join(dir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 			return written, fmt.Errorf("ensure output dir for %s: %w", outPath, err)
@@ -532,9 +550,46 @@ func writeProxyEndpoints(bundle []byte, dir string) (int, error) {
 	}
 
 	if written == 0 {
-		return 0, fmt.Errorf("no ProxyEndpoint files found in Apigee bundle")
+		return 0, fmt.Errorf("no matching artifacts found in Apigee bundle")
 	}
 	return written, nil
+}
+
+type artifactKind int
+
+const (
+	artifactProxyEndpoint artifactKind = iota
+	artifactTargetEndpoint
+	artifactResource
+)
+
+func classifyArtifact(name string, opts extractOptions) (artifactKind, string, bool) {
+	if prefix, ok := proxyEndpointPrefix(name); ok {
+		if !opts.IncludeProxyEndpoints {
+			return artifactProxyEndpoint, "", false
+		}
+		return artifactProxyEndpoint, prefix, true
+	}
+	if prefix, ok := targetEndpointPrefix(name); ok {
+		if !opts.IncludeTargetEndpoints {
+			return artifactTargetEndpoint, "", false
+		}
+		return artifactTargetEndpoint, prefix, true
+	}
+	if strings.HasPrefix(name, "apiproxy/resources/") {
+		if !opts.IncludeResources {
+			return artifactResource, "", false
+		}
+		return artifactResource, "apiproxy/resources/", true
+	}
+	return artifactProxyEndpoint, "", false
+}
+
+func buildArtifactRelPath(name, prefix string, preserveStructure bool) string {
+	if preserveStructure && strings.HasPrefix(name, "apiproxy/") {
+		return strings.TrimPrefix(name, "apiproxy/")
+	}
+	return strings.TrimPrefix(name, prefix)
 }
 
 func proxyEndpointPrefix(name string) (string, bool) {
@@ -551,6 +606,64 @@ func proxyEndpointPrefix(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func targetEndpointPrefix(name string) (string, bool) {
+	prefixes := []string{
+		"apiproxy/targets/",
+		"apiproxy/target-endpoints/",
+		"apiproxy/target_endpoints/",
+		"apiproxy/target-endpoint/",
+		"apiproxy/target_endpoint/",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return prefix, true
+		}
+	}
+	return "", false
+}
+
+func downloadProxyBundle(opts DownloadOptions) ([]byte, int, error) {
+	proxy := strings.TrimSpace(opts.Proxy)
+	if proxy == "" {
+		return nil, 0, fmt.Errorf("proxy name is required when -proxy flag is used")
+	}
+
+	org := strings.TrimSpace(opts.Org)
+	if org == "" {
+		return nil, 0, fmt.Errorf("Apigee organization is required (set -org or APIGEE_ORG)")
+	}
+
+	token := strings.TrimSpace(opts.Token)
+	if token == "" {
+		return nil, 0, fmt.Errorf("Apigee OAuth token is required (set -token or APIGEE_TOKEN)")
+	}
+
+	client := NewClient(opts.Host, org, token)
+
+	rev := opts.Revision
+	if rev <= 0 {
+		latest, err := client.latestRevision(proxy)
+		if err != nil {
+			return nil, 0, fmt.Errorf("resolve latest revision: %w", err)
+		}
+		if latest == 0 {
+			return nil, 0, fmt.Errorf("no revisions found for proxy %s", proxy)
+		}
+		rev = latest
+	}
+
+	if !opts.Quiet {
+		fmt.Printf("Downloading Apigee proxy %s revision %d...\n", proxy, rev)
+	}
+
+	bundle, err := client.fetchProxyBundle(proxy, rev)
+	if err != nil {
+		return nil, 0, fmt.Errorf("fetch proxy bundle: %w", err)
+	}
+
+	return bundle, rev, nil
 }
 
 func (c *Client) fetchTargetServer(env, name string) (TargetServerRecord, error) {
@@ -624,22 +737,6 @@ func (c *Client) listTargetServers(env string) ([]string, error) {
 		return nil, fmt.Errorf("decode target servers: %w", err)
 	}
 	return names, nil
-}
-
-func targetEndpointPrefix(name string) (string, bool) {
-	prefixes := []string{
-		"apiproxy/targets/",
-		"apiproxy/target-endpoints/",
-		"apiproxy/target_endpoints/",
-		"apiproxy/target-endpoint/",
-		"apiproxy/target_endpoint/",
-	}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(name, prefix) {
-			return prefix, true
-		}
-	}
-	return "", false
 }
 
 func (c *Client) doRequestAny(method, endpoint, accept string) (*http.Response, error) {
