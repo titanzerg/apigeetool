@@ -31,6 +31,7 @@ type GenerateArgs struct {
 	ProxyName   string
 	Revision    int
 	DownloadDir string
+	Deploy      bool
 }
 
 type FindArgs struct {

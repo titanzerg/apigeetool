@@ -135,6 +135,11 @@ func (c *Client) EnvironmentsForRevision(proxy string, revision int) ([]string, 
 	return c.environmentsForRevision(proxy, revision)
 }
 
+// DeployedRevisions returns the highest deployed revision per environment.
+func (c *Client) DeployedRevisions(proxy string) (map[string]int, error) {
+	return c.deployedRevisions(proxy)
+}
+
 func (c *Client) ListTargetServers(env string) ([]string, error) {
 	return c.listTargetServers(env)
 }
@@ -348,6 +353,55 @@ func (c *Client) environmentsForRevision(proxy string, revision int) ([]string, 
 		}
 	}
 	return envs, nil
+}
+
+func (c *Client) deployedRevisions(proxy string) (map[string]int, error) {
+	endpoint := fmt.Sprintf(
+		"%s/v1/organizations/%s/apis/%s/deployments",
+		c.host,
+		url.PathEscape(c.org),
+		url.PathEscape(proxy),
+	)
+
+	type deployment struct {
+		Environment string          `json:"environment"`
+		Revision    json.RawMessage `json:"revision"`
+	}
+	var payload struct {
+		Deployments []deployment `json:"deployments"`
+	}
+
+	resp, err := c.doRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode deployments: %w", err)
+	}
+
+	results := make(map[string]int)
+	for _, dep := range payload.Deployments {
+		env := strings.TrimSpace(dep.Environment)
+		if env == "" {
+			continue
+		}
+		for _, rev := range parseRevisionEntries(dep.Revision) {
+			state := strings.TrimSpace(strings.ToLower(rev.State))
+			if state != "" && state != "deployed" {
+				continue
+			}
+			num, err := strconv.Atoi(strings.TrimSpace(rev.Name))
+			if err != nil {
+				continue
+			}
+			if num > results[env] {
+				results[env] = num
+			}
+		}
+	}
+	return results, nil
 }
 
 type revisionEntry struct {
