@@ -17,63 +17,78 @@ func ReplaceProxyEndpointInBundle(bundle []byte, endpointFile string, content []
 		return nil, "", fmt.Errorf("parse bundle zip: %w", err)
 	}
 
-	var matchName string
-	for _, file := range zipReader.File {
-		if file.FileInfo().IsDir() {
-			continue
-		}
-		if !strings.HasSuffix(strings.ToLower(file.Name), ".xml") {
-			continue
-		}
-		if _, ok := proxyEndpointPrefix(file.Name); !ok {
-			continue
-		}
-		if filepath.Base(file.Name) == endpointFile {
-			if matchName != "" {
-				return nil, "", fmt.Errorf("multiple ProxyEndpoints named %s found in bundle", endpointFile)
-			}
-			matchName = file.Name
-		}
-	}
-	if matchName == "" {
-		return nil, "", fmt.Errorf("ProxyEndpoint %s not found in bundle", endpointFile)
+	matchName, err := findProxyEndpointInBundle(zipReader, endpointFile)
+	if err != nil {
+		return nil, "", err
 	}
 
 	var out bytes.Buffer
 	zipWriter := zip.NewWriter(&out)
 	for _, file := range zipReader.File {
-		header := file.FileHeader
-		writer, err := zipWriter.CreateHeader(&header)
-		if err != nil {
+		if err := copyZipEntry(zipWriter, file, matchName, content); err != nil {
 			zipWriter.Close()
-			return nil, "", fmt.Errorf("create zip entry %s: %w", file.Name, err)
+			return nil, "", err
 		}
-		if file.FileInfo().IsDir() {
-			continue
-		}
-
-		if file.Name == matchName {
-			if _, err := writer.Write(content); err != nil {
-				zipWriter.Close()
-				return nil, "", fmt.Errorf("write updated %s: %w", file.Name, err)
-			}
-			continue
-		}
-
-		rc, err := file.Open()
-		if err != nil {
-			zipWriter.Close()
-			return nil, "", fmt.Errorf("open %s: %w", file.Name, err)
-		}
-		if _, err := io.Copy(writer, rc); err != nil {
-			rc.Close()
-			zipWriter.Close()
-			return nil, "", fmt.Errorf("copy %s: %w", file.Name, err)
-		}
-		rc.Close()
 	}
 	if err := zipWriter.Close(); err != nil {
 		return nil, "", fmt.Errorf("finalize zip: %w", err)
 	}
 	return out.Bytes(), matchName, nil
+}
+
+func findProxyEndpointInBundle(reader *zip.Reader, endpointFile string) (string, error) {
+	var matchName string
+	for _, file := range reader.File {
+		if !isProxyEndpointFile(file) {
+			continue
+		}
+		if filepath.Base(file.Name) != endpointFile {
+			continue
+		}
+		if matchName != "" {
+			return "", fmt.Errorf("multiple ProxyEndpoints named %s found in bundle", endpointFile)
+		}
+		matchName = file.Name
+	}
+	if matchName == "" {
+		return "", fmt.Errorf("ProxyEndpoint %s not found in bundle", endpointFile)
+	}
+	return matchName, nil
+}
+
+func isProxyEndpointFile(file *zip.File) bool {
+	if file.FileInfo().IsDir() {
+		return false
+	}
+	if !strings.HasSuffix(strings.ToLower(file.Name), ".xml") {
+		return false
+	}
+	_, ok := proxyEndpointPrefix(file.Name)
+	return ok
+}
+
+func copyZipEntry(writer *zip.Writer, file *zip.File, matchName string, content []byte) error {
+	header := file.FileHeader
+	entry, err := writer.CreateHeader(&header)
+	if err != nil {
+		return fmt.Errorf("create zip entry %s: %w", file.Name, err)
+	}
+	if file.FileInfo().IsDir() {
+		return nil
+	}
+	if file.Name == matchName {
+		if _, err := entry.Write(content); err != nil {
+			return fmt.Errorf("write updated %s: %w", file.Name, err)
+		}
+		return nil
+	}
+	rc, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("open %s: %w", file.Name, err)
+	}
+	if _, err := io.Copy(entry, rc); err != nil {
+		rc.Close()
+		return fmt.Errorf("copy %s: %w", file.Name, err)
+	}
+	return rc.Close()
 }

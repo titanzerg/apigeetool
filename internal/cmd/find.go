@@ -12,9 +12,9 @@ import (
 )
 
 func RunFindProxy(cfg ApigeeConfig, args FindArgs) error {
-	searchTerm := normalizeBasePathLocal(args.BasePath)
-	if searchTerm == "" {
-		return fmt.Errorf("base path is required for -findproxy")
+	searchTerm, err := requireBasePath(args.BasePath)
+	if err != nil {
+		return err
 	}
 
 	if dbURL := firstDBURL(args.DBURL); dbURL != "" {
@@ -22,22 +22,57 @@ func RunFindProxy(cfg ApigeeConfig, args FindArgs) error {
 		if err != nil {
 			return err
 		}
-		if len(matches) == 0 {
-			fmt.Printf("No Apigee proxies found in DB with BasePath containing %q\n", searchTerm)
-			return nil
-		}
-
-		fmt.Printf("Found %d Apigee proxies with BasePath containing %q (from DB):\n", len(matches), searchTerm)
-		for _, match := range matches {
-			fmt.Printf("- %s (endpoint %s, revision %d, basepath %s)\n", match.Proxy, match.Endpoint, match.Revision, match.BasePath)
-		}
+		reportProxyMatches(searchTerm, matches, true)
 		return nil
 	}
 
 	if err := RequireApigeeAuth(cfg, "finding proxies"); err != nil {
 		return err
 	}
-	progress := func(p apigee.ProxyScanProgress) {
+	matches, err := apigee.FindProxiesByBasePath(apigee.FindProxyOptions{
+		Host:     cfg.Host,
+		Org:      cfg.Org,
+		Token:    cfg.Token,
+		BasePath: searchTerm,
+		Progress: proxyScanProgressPrinter(),
+	})
+	if err != nil {
+		return fmt.Errorf("find proxies by base path: %w", err)
+	}
+	reportProxyMatches(searchTerm, matches, false)
+	return nil
+}
+
+func requireBasePath(basePath string) (string, error) {
+	searchTerm := normalizeBasePathLocal(basePath)
+	if searchTerm == "" {
+		return "", fmt.Errorf("base path is required for -findproxy")
+	}
+	return searchTerm, nil
+}
+
+func reportProxyMatches(searchTerm string, matches []apigee.ProxyMatch, fromDB bool) {
+	if len(matches) == 0 {
+		if fromDB {
+			fmt.Printf("No Apigee proxies found in DB with BasePath containing %q\n", searchTerm)
+			return
+		}
+		fmt.Printf("No Apigee proxies found with BasePath containing %q\n", searchTerm)
+		return
+	}
+
+	if fromDB {
+		fmt.Printf("Found %d Apigee proxies with BasePath containing %q (from DB):\n", len(matches), searchTerm)
+	} else {
+		fmt.Printf("Found %d Apigee proxies with BasePath containing %q:\n", len(matches), searchTerm)
+	}
+	for _, match := range matches {
+		fmt.Printf("- %s (endpoint %s, revision %d, basepath %s)\n", match.Proxy, match.Endpoint, match.Revision, match.BasePath)
+	}
+}
+
+func proxyScanProgressPrinter() func(apigee.ProxyScanProgress) {
+	return func(p apigee.ProxyScanProgress) {
 		if p.Err != nil {
 			fmt.Printf("[%d/%d] %s (rev %d) error: %v\n", p.Index, p.Total, p.Proxy, p.Revision, p.Err)
 			return
@@ -53,26 +88,6 @@ func RunFindProxy(cfg ApigeeConfig, args FindArgs) error {
 			fmt.Println("  -> no match")
 		}
 	}
-	matches, err := apigee.FindProxiesByBasePath(apigee.FindProxyOptions{
-		Host:     cfg.Host,
-		Org:      cfg.Org,
-		Token:    cfg.Token,
-		BasePath: searchTerm,
-		Progress: progress,
-	})
-	if err != nil {
-		return fmt.Errorf("find proxies by base path: %w", err)
-	}
-	if len(matches) == 0 {
-		fmt.Printf("No Apigee proxies found with BasePath containing %q\n", searchTerm)
-		return nil
-	}
-
-	fmt.Printf("Found %d Apigee proxies with BasePath containing %q:\n", len(matches), searchTerm)
-	for _, match := range matches {
-		fmt.Printf("- %s (endpoint %s, revision %d, basepath %s)\n", match.Proxy, match.Endpoint, match.Revision, match.BasePath)
-	}
-	return nil
 }
 
 func findProxiesInDB(basePath, dbURL string, args FindArgs) ([]apigee.ProxyMatch, error) {

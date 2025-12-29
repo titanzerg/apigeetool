@@ -2,6 +2,8 @@ package apigee
 
 import "testing"
 
+const basePathFooBar = "/foo/bar"
+
 func TestNormalizeBasePath(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -40,10 +42,10 @@ func TestBasePathContains(t *testing.T) {
 		query  string
 		want   bool
 	}{
-		{"/foo/bar", "foo", true},
-		{"/foo/bar/", "/foo", true},
-		{"/foo/bar", "BAR", true},
-		{"/foo/bar", "baz", false},
+		{basePathFooBar, "foo", true},
+		{basePathFooBar + "/", "/foo", true},
+		{basePathFooBar, "BAR", true},
+		{basePathFooBar, "baz", false},
 		{"/", "/", true},
 		{"", "foo", false},
 		{"/foo", "", false},

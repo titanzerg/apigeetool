@@ -4,9 +4,14 @@ import (
 	"testing"
 )
 
+const (
+	testEnvOrg   = "env-org"
+	testEnvToken = "env-token"
+)
+
 func TestResolveApigeeConfigPrefersFlags(t *testing.T) {
-	t.Setenv("APIGEE_ORG", "env-org")
-	t.Setenv("APIGEE_TOKEN", "env-token")
+	t.Setenv("APIGEE_ORG", testEnvOrg)
+	t.Setenv("APIGEE_TOKEN", testEnvToken)
 
 	cfg := ResolveApigeeConfig("flag-org", "flag-token", "")
 	if cfg.Org != "flag-org" {
@@ -21,10 +26,10 @@ func TestResolveApigeeConfigPrefersFlags(t *testing.T) {
 }
 
 func TestResolveApigeeConfigFallsBackToEnv(t *testing.T) {
-	t.Setenv("APIGEE_ORG", "env-org")
-	t.Setenv("APIGEE_TOKEN", "env-token")
+	t.Setenv("APIGEE_ORG", testEnvOrg)
+	t.Setenv("APIGEE_TOKEN", testEnvToken)
 	cfg := ResolveApigeeConfig("", "", "")
-	if cfg.Org != "env-org" || cfg.Token != "env-token" {
+	if cfg.Org != testEnvOrg || cfg.Token != testEnvToken {
 		t.Fatalf("expected env fallback, got org=%q token=%q", cfg.Org, cfg.Token)
 	}
 }

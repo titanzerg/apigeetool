@@ -20,6 +20,8 @@ import (
 	"apigee/internal/util"
 )
 
+const bearerPrefix = "Bearer "
+
 // DownloadOptions contains parameters for downloading proxy endpoints.
 type DownloadOptions struct {
 	Host      string
@@ -206,169 +208,60 @@ func (c *Client) listAPIs() ([]string, error) {
 	return names, nil
 }
 
-func (c *Client) listProxyEndpoints(proxy string, revision int) ([]string, error) {
-	endpoints := []string{
-		fmt.Sprintf(
-			"%s/v1/organizations/%s/apis/%s/revisions/%d/proxy-endpoints",
-			c.host,
-			url.PathEscape(c.org),
-			url.PathEscape(proxy),
-			revision,
-		),
-		fmt.Sprintf(
-			"%s/v1/organizations/%s/apis/%s/revisions/%d/proxies",
-			c.host,
-			url.PathEscape(c.org),
-			url.PathEscape(proxy),
-			revision,
-		),
-	}
-
-	var lastErr error
-	for _, endpoint := range endpoints {
-		resp, err := c.doRequestAny(http.MethodGet, endpoint, "application/json")
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			lastErr = fmt.Errorf("apigee proxy endpoints list failed: %s", extractError(resp))
-			resp.Body.Close()
-			continue
-		}
-		data, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("read proxy endpoints list: %w", err)
-		}
-		names, err := decodeNameList(data)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return names, nil
-	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, fmt.Errorf("unable to list proxy endpoints for %s rev %d", proxy, revision)
-}
-
-func (c *Client) fetchProxyEndpointConfig(proxy string, revision int, endpointName string) ([]byte, error) {
-	endpoints := []string{
-		fmt.Sprintf(
-			"%s/v1/organizations/%s/apis/%s/revisions/%d/proxy-endpoints/%s",
-			c.host,
-			url.PathEscape(c.org),
-			url.PathEscape(proxy),
-			revision,
-			url.PathEscape(endpointName),
-		),
-		fmt.Sprintf(
-			"%s/v1/organizations/%s/apis/%s/revisions/%d/proxies/%s",
-			c.host,
-			url.PathEscape(c.org),
-			url.PathEscape(proxy),
-			revision,
-			url.PathEscape(endpointName),
-		),
-	}
-
-	var lastErr error
-	for _, endpoint := range endpoints {
-		resp, err := c.doRequestAny(http.MethodGet, endpoint, "application/xml")
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			lastErr = fmt.Errorf("apigee proxy endpoint download failed: %s", extractError(resp))
-			resp.Body.Close()
-			continue
-		}
-
-		data, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("read proxy endpoint body: %w", err)
-		}
-		return data, nil
-	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, fmt.Errorf("unable to fetch proxy endpoint %s.%s rev %d", proxy, endpointName, revision)
-}
-
 func (c *Client) environmentsForRevision(proxy string, revision int) ([]string, error) {
-	endpoint := fmt.Sprintf(
-		"%s/v1/organizations/%s/apis/%s/deployments",
-		c.host,
-		url.PathEscape(c.org),
-		url.PathEscape(proxy),
-	)
-
-	type deployment struct {
-		Environment string          `json:"environment"`
-		Revision    json.RawMessage `json:"revision"`
-	}
-	var payload struct {
-		Deployments []deployment `json:"deployments"`
-	}
-
-	resp, err := c.doRequest(endpoint)
+	deployments, err := c.fetchDeployments(proxy)
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode deployments: %w", err)
 	}
 
 	seen := make(map[string]struct{})
 	var envs []string
-	for _, dep := range payload.Deployments {
+	for _, dep := range deployments {
 		env := strings.TrimSpace(dep.Environment)
 		if env != "" {
 			seen[env] = struct{}{}
 		}
-		for _, rev := range parseRevisionEntries(dep.Revision) {
-			num, _ := strconv.Atoi(strings.TrimSpace(rev.Name))
-			if num == revision {
-				state := strings.TrimSpace(strings.ToLower(rev.State))
-				if state == "" || state == "deployed" {
-					envs = append(envs, env)
-					break
-				}
-			}
+		if hasRevision(dep.Revision, revision) {
+			envs = append(envs, env)
 		}
 	}
 	if len(envs) == 0 && len(seen) > 0 {
-		for env := range seen {
-			if env == "" {
-				continue
-			}
-			envs = append(envs, env)
-		}
+		envs = uniqueEnvList(seen)
 	}
 	return envs, nil
 }
 
 func (c *Client) deployedRevisions(proxy string) (map[string]int, error) {
+	deployments, err := c.fetchDeployments(proxy)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make(map[string]int)
+	for _, dep := range deployments {
+		env := strings.TrimSpace(dep.Environment)
+		if env == "" {
+			continue
+		}
+		updateMaxRevision(results, env, dep.Revision)
+	}
+	return results, nil
+}
+
+type deploymentRecord struct {
+	Environment string          `json:"environment"`
+	Revision    json.RawMessage `json:"revision"`
+}
+
+func (c *Client) fetchDeployments(proxy string) ([]deploymentRecord, error) {
 	endpoint := fmt.Sprintf(
 		"%s/v1/organizations/%s/apis/%s/deployments",
 		c.host,
 		url.PathEscape(c.org),
 		url.PathEscape(proxy),
 	)
-
-	type deployment struct {
-		Environment string          `json:"environment"`
-		Revision    json.RawMessage `json:"revision"`
-	}
 	var payload struct {
-		Deployments []deployment `json:"deployments"`
+		Deployments []deploymentRecord `json:"deployments"`
 	}
 
 	resp, err := c.doRequest(endpoint)
@@ -380,28 +273,48 @@ func (c *Client) deployedRevisions(proxy string) (map[string]int, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode deployments: %w", err)
 	}
+	return payload.Deployments, nil
+}
 
-	results := make(map[string]int)
-	for _, dep := range payload.Deployments {
-		env := strings.TrimSpace(dep.Environment)
+func hasRevision(raw json.RawMessage, target int) bool {
+	for _, rev := range parseRevisionEntries(raw) {
+		num, _ := strconv.Atoi(strings.TrimSpace(rev.Name))
+		if num != target {
+			continue
+		}
+		state := strings.TrimSpace(strings.ToLower(rev.State))
+		if state == "" || state == "deployed" {
+			return true
+		}
+	}
+	return false
+}
+
+func updateMaxRevision(results map[string]int, env string, raw json.RawMessage) {
+	for _, rev := range parseRevisionEntries(raw) {
+		state := strings.TrimSpace(strings.ToLower(rev.State))
+		if state != "" && state != "deployed" {
+			continue
+		}
+		num, err := strconv.Atoi(strings.TrimSpace(rev.Name))
+		if err != nil {
+			continue
+		}
+		if num > results[env] {
+			results[env] = num
+		}
+	}
+}
+
+func uniqueEnvList(seen map[string]struct{}) []string {
+	envs := make([]string, 0, len(seen))
+	for env := range seen {
 		if env == "" {
 			continue
 		}
-		for _, rev := range parseRevisionEntries(dep.Revision) {
-			state := strings.TrimSpace(strings.ToLower(rev.State))
-			if state != "" && state != "deployed" {
-				continue
-			}
-			num, err := strconv.Atoi(strings.TrimSpace(rev.Name))
-			if err != nil {
-				continue
-			}
-			if num > results[env] {
-				results[env] = num
-			}
-		}
+		envs = append(envs, env)
 	}
-	return results, nil
+	return envs
 }
 
 type revisionEntry struct {
@@ -499,7 +412,7 @@ func (c *Client) fetchProxyBundle(proxy string, revision int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", bearerPrefix+c.token)
 	req.Header.Set("Accept", "application/octet-stream")
 
 	resp, err := c.httpClient.Do(req)
@@ -524,7 +437,7 @@ func (c *Client) doRequest(endpoint string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", bearerPrefix+c.token)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -559,54 +472,87 @@ func writeProxyArtifacts(bundle []byte, dir string, opts extractOptions) (int, e
 		return 0, fmt.Errorf("create output dir: %w", err)
 	}
 
-	readerAt := bytes.NewReader(bundle)
-	zipReader, err := zip.NewReader(readerAt, int64(len(bundle)))
+	zipReader, err := newZipReader(bundle)
 	if err != nil {
-		return 0, fmt.Errorf("parse bundle zip: %w", err)
+		return 0, err
 	}
 
-	var written int
-	for _, file := range zipReader.File {
-		name := file.Name
-		kind, prefix, ok := classifyArtifact(name, opts)
-		if !ok {
-			continue
-		}
-
-		if file.FileInfo().IsDir() {
-			continue
-		}
-
-		if kind != artifactResource && !strings.HasSuffix(strings.ToLower(name), ".xml") {
-			continue
-		}
-
-		rel := buildArtifactRelPath(name, prefix, opts.PreserveStructure)
-		outPath := filepath.Join(dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-			return written, fmt.Errorf("ensure output dir for %s: %w", outPath, err)
-		}
-
-		rc, err := file.Open()
-		if err != nil {
-			return written, fmt.Errorf("open %s in bundle: %w", name, err)
-		}
-		data, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return written, fmt.Errorf("read %s: %w", name, err)
-		}
-
-		if err := os.WriteFile(outPath, data, 0o644); err != nil {
-			return written, fmt.Errorf("write %s: %w", outPath, err)
-		}
-		written++
+	written, err := writeBundleArtifacts(zipReader.File, dir, opts)
+	if err != nil {
+		return written, err
 	}
 
 	if written == 0 {
 		return 0, fmt.Errorf("no matching artifacts found in Apigee bundle")
 	}
 	return written, nil
+}
+
+func newZipReader(bundle []byte) (*zip.Reader, error) {
+	readerAt := bytes.NewReader(bundle)
+	zipReader, err := zip.NewReader(readerAt, int64(len(bundle)))
+	if err != nil {
+		return nil, fmt.Errorf("parse bundle zip: %w", err)
+	}
+	return zipReader, nil
+}
+
+func writeBundleArtifacts(files []*zip.File, dir string, opts extractOptions) (int, error) {
+	var written int
+	for _, file := range files {
+		name := file.Name
+		kind, prefix, ok := classifyArtifact(name, opts)
+		if !ok {
+			continue
+		}
+		if skipArtifactFile(file, kind) {
+			continue
+		}
+		outPath, err := artifactOutputPath(dir, name, prefix, opts.PreserveStructure)
+		if err != nil {
+			return written, err
+		}
+		if err := writeBundleFile(outPath, file); err != nil {
+			return written, err
+		}
+		written++
+	}
+	return written, nil
+}
+
+func skipArtifactFile(file *zip.File, kind artifactKind) bool {
+	if file.FileInfo().IsDir() {
+		return true
+	}
+	if kind == artifactResource {
+		return false
+	}
+	return !strings.HasSuffix(strings.ToLower(file.Name), ".xml")
+}
+
+func artifactOutputPath(dir, name, prefix string, preserveStructure bool) (string, error) {
+	rel := buildArtifactRelPath(name, prefix, preserveStructure)
+	outPath := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return "", fmt.Errorf("ensure output dir for %s: %w", outPath, err)
+	}
+	return outPath, nil
+}
+
+func writeBundleFile(outPath string, file *zip.File) error {
+	rc, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("open %s in bundle: %w", file.Name, err)
+	}
+	data, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		return fmt.Errorf("read %s: %w", file.Name, err)
+	}
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", outPath, err)
+	}
+	return nil
 }
 
 type artifactKind int
@@ -798,7 +744,7 @@ func (c *Client) doRequestAny(method, endpoint, accept string) (*http.Response, 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", bearerPrefix+c.token)
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
@@ -821,49 +767,75 @@ type nameItem struct {
 }
 
 func decodeNameList(data []byte) ([]string, error) {
+	if names, ok := decodeNameListArray(data); ok {
+		return names, nil
+	}
+	if names, ok := decodeNameListContainer(data); ok {
+		return names, nil
+	}
+	if names, ok := decodeNameListKeyed(data); ok {
+		return names, nil
+	}
+	if names, ok := decodeNameListObjects(data); ok {
+		return names, nil
+	}
+	return nil, fmt.Errorf("unsupported response: %s", strings.TrimSpace(string(data)))
+}
+
+func decodeNameListArray(data []byte) ([]string, bool) {
 	var arr []string
 	if err := json.Unmarshal(data, &arr); err == nil {
-		return arr, nil
+		return arr, true
 	}
+	return nil, false
+}
 
+func decodeNameListContainer(data []byte) ([]string, bool) {
 	var container nameContainer
-	if err := json.Unmarshal(data, &container); err == nil {
-		names := collectNames(container.Proxies)
-		names = append(names, collectNames(container.Items)...)
-		names = append(names, collectNames(container.APIs)...)
-		names = append(names, collectNames(container.APIProducts)...)
-		names = append(names, collectNames(container.Apps)...)
-		names = append(names, collectNames(container.AppsList)...)
-		names = append(names, container.AppIDs...)
-		if len(names) > 0 {
-			return names, nil
-		}
+	if err := json.Unmarshal(data, &container); err != nil {
+		return nil, false
 	}
+	names := collectNames(container.Proxies)
+	names = append(names, collectNames(container.Items)...)
+	names = append(names, collectNames(container.APIs)...)
+	names = append(names, collectNames(container.APIProducts)...)
+	names = append(names, collectNames(container.Apps)...)
+	names = append(names, collectNames(container.AppsList)...)
+	names = append(names, container.AppIDs...)
+	if len(names) > 0 {
+		return names, true
+	}
+	return nil, false
+}
 
+func decodeNameListKeyed(data []byte) ([]string, bool) {
 	var keyed map[string][]string
-	if err := json.Unmarshal(data, &keyed); err == nil {
-		for _, key := range []string{"apis", "items", "proxies", "apiProduct", "app", "apps", "appIds", "appids"} {
-			if names := keyed[key]; len(names) > 0 {
-				return names, nil
-			}
+	if err := json.Unmarshal(data, &keyed); err != nil {
+		return nil, false
+	}
+	for _, key := range []string{"apis", "items", "proxies", "apiProduct", "app", "apps", "appIds", "appids"} {
+		if names := keyed[key]; len(names) > 0 {
+			return names, true
 		}
 	}
+	return nil, false
+}
 
-	// Fallback: array of objects with name/appId/id fields.
+func decodeNameListObjects(data []byte) ([]string, bool) {
 	var objects []map[string]interface{}
-	if err := json.Unmarshal(data, &objects); err == nil {
-		var names []string
-		for _, obj := range objects {
-			if name := extractNameish(obj); name != "" {
-				names = append(names, name)
-			}
-		}
-		if len(names) > 0 {
-			return names, nil
+	if err := json.Unmarshal(data, &objects); err != nil {
+		return nil, false
+	}
+	var names []string
+	for _, obj := range objects {
+		if name := extractNameish(obj); name != "" {
+			names = append(names, name)
 		}
 	}
-
-	return nil, fmt.Errorf("unsupported response: %s", strings.TrimSpace(string(data)))
+	if len(names) > 0 {
+		return names, true
+	}
+	return nil, false
 }
 
 func collectNames(items []nameItem) []string {
@@ -884,14 +856,7 @@ func collectNames(items []nameItem) []string {
 }
 
 func extractNameish(obj map[string]interface{}) string {
-	for _, key := range []string{"name", "appId", "appID", "app_id", "app_name", "appName", "id"} {
-		if v, ok := obj[key]; ok {
-			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-				return strings.TrimSpace(s)
-			}
-		}
-	}
-	return ""
+	return firstStringValue(obj, nameKeys())
 }
 
 type bundleEndpoint struct {
@@ -901,6 +866,12 @@ type bundleEndpoint struct {
 	FlowCount     int
 }
 
+type proxyMeta struct {
+	basePath     string
+	targetRoutes []string
+	flowCount    int
+}
+
 func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
 	readerAt := bytes.NewReader(bundle)
 	zipReader, err := zip.NewReader(readerAt, int64(len(bundle)))
@@ -908,103 +879,154 @@ func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
 		return nil, fmt.Errorf("parse bundle zip: %w", err)
 	}
 
-	type proxyMeta struct {
-		basePath     string
-		targetRoutes []string
-		flowCount    int
+	targetServers, proxyData, err := collectBundleData(zipReader.File)
+	if err != nil {
+		return nil, err
+	}
+	return buildBundleEndpoints(targetServers, proxyData)
+}
+
+func shouldSkipBundleEntry(name string, isDir bool) bool {
+	if isDir {
+		return true
+	}
+	return !strings.HasSuffix(strings.ToLower(name), ".xml")
+}
+
+func readZipEntry(file *zip.File) ([]byte, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open %s in bundle: %w", file.Name, err)
+	}
+	data, readErr := io.ReadAll(rc)
+	rc.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read %s: %w", file.Name, readErr)
+	}
+	return data, nil
+}
+
+func applyTargetEndpointData(name string, data []byte, targetServers map[string][]string) (bool, error) {
+	targetPrefix, ok := targetEndpointPrefix(name)
+	if !ok {
+		return false, nil
+	}
+	rel := strings.TrimPrefix(name, targetPrefix)
+	if rel == "" {
+		return true, nil
+	}
+	targetName, servers, err := proxyxml.ParseTargetEndpointServers(data)
+	if err != nil {
+		return true, fmt.Errorf("parse target endpoint %s: %w", name, err)
+	}
+	if targetName == "" {
+		targetName = strings.TrimSuffix(rel, path.Ext(rel))
+	}
+	if targetName == "" {
+		return true, nil
+	}
+	key := strings.ToLower(targetName)
+	targetServers[key] = util.MergeAndUnique(targetServers[key], servers)
+	return true, nil
+}
+
+func applyProxyEndpointData(name string, data []byte, proxyData map[string]proxyMeta) (bool, error) {
+	prefix, ok := proxyEndpointPrefix(name)
+	if !ok {
+		return false, nil
 	}
 
+	endpointName := extractProxyEndpointName(name, prefix)
+	if endpointName == "" {
+		return true, nil
+	}
+	flows, err := proxyxml.ParseFlows(data)
+	if err != nil {
+		return true, fmt.Errorf("parse flows for %s: %w", name, err)
+	}
+	basePath, err := proxyxml.ExtractBasePath(data)
+	if err != nil {
+		return true, fmt.Errorf("parse base path for %s: %w", name, err)
+	}
+	targets, err := proxyxml.ExtractRouteTargets(data)
+	if err != nil {
+		return true, fmt.Errorf("parse route targets for %s: %w", name, err)
+	}
+	proxyData[endpointName] = proxyMeta{
+		basePath:     basePath,
+		targetRoutes: targets,
+		flowCount:    len(flows),
+	}
+	return true, nil
+}
+
+func extractProxyEndpointName(name, prefix string) string {
+	rel := strings.TrimPrefix(name, prefix)
+	rel = strings.TrimLeft(rel, "/")
+	if rel == "" {
+		return ""
+	}
+	segment := rel
+	if idx := strings.Index(segment, "/"); idx >= 0 {
+		segment = segment[:idx]
+	}
+	return strings.TrimSuffix(segment, path.Ext(segment))
+}
+
+func nameKeys() []string {
+	return []string{"name", "appId", "appID", "app_id", "app_name", "appName", "id"}
+}
+
+func firstStringValue(obj map[string]interface{}, keys []string) string {
+	for _, key := range keys {
+		if v, ok := obj[key]; ok {
+			if s, ok := v.(string); ok {
+				value := strings.TrimSpace(s)
+				if value != "" {
+					return value
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func collectBundleData(files []*zip.File) (map[string][]string, map[string]proxyMeta, error) {
 	targetServers := make(map[string][]string)
 	proxyData := make(map[string]proxyMeta)
-
-	for _, file := range zipReader.File {
-		name := file.Name
-		if file.FileInfo().IsDir() {
-			continue
-		}
-		if !strings.HasSuffix(strings.ToLower(name), ".xml") {
-			continue
-		}
-
-		rc, err := file.Open()
-		if err != nil {
-			return nil, fmt.Errorf("open %s in bundle: %w", name, err)
-		}
-		data, readErr := io.ReadAll(rc)
-		rc.Close()
-		if readErr != nil {
-			return nil, fmt.Errorf("read %s: %w", name, readErr)
-		}
-
-		if targetPrefix, ok := targetEndpointPrefix(name); ok {
-			rel := strings.TrimPrefix(name, targetPrefix)
-			if rel == "" {
-				continue
-			}
-			targetName, servers, err := proxyxml.ParseTargetEndpointServers(data)
-			if err != nil {
-				return nil, fmt.Errorf("parse target endpoint %s: %w", name, err)
-			}
-			if targetName == "" {
-				targetName = strings.TrimSuffix(rel, path.Ext(rel))
-			}
-			if targetName == "" {
-				continue
-			}
-			key := strings.ToLower(targetName)
-			targetServers[key] = util.MergeAndUnique(targetServers[key], servers)
-			continue
-		}
-
-		prefix, ok := proxyEndpointPrefix(name)
-		if !ok {
-			continue
-		}
-
-		rel := strings.TrimPrefix(name, prefix)
-		rel = strings.TrimLeft(rel, "/")
-		if rel == "" {
-			continue
-		}
-		segment := rel
-		if idx := strings.Index(segment, "/"); idx >= 0 {
-			segment = segment[:idx]
-		}
-		endpointName := strings.TrimSuffix(segment, path.Ext(segment))
-
-		flows, err := proxyxml.ParseFlows(data)
-		if err != nil {
-			return nil, fmt.Errorf("parse flows for %s: %w", name, err)
-		}
-		basePath, err := proxyxml.ExtractBasePath(data)
-		if err != nil {
-			return nil, fmt.Errorf("parse base path for %s: %w", name, err)
-		}
-		targets, err := proxyxml.ExtractRouteTargets(data)
-		if err != nil {
-			return nil, fmt.Errorf("parse route targets for %s: %w", name, err)
-		}
-		proxyData[endpointName] = proxyMeta{
-			basePath:     basePath,
-			targetRoutes: targets,
-			flowCount:    len(flows),
+	for _, file := range files {
+		if err := processBundleEntry(file, targetServers, proxyData); err != nil {
+			return nil, nil, err
 		}
 	}
+	return targetServers, proxyData, nil
+}
 
+func processBundleEntry(file *zip.File, targetServers map[string][]string, proxyData map[string]proxyMeta) error {
+	if shouldSkipBundleEntry(file.Name, file.FileInfo().IsDir()) {
+		return nil
+	}
+	data, err := readZipEntry(file)
+	if err != nil {
+		return err
+	}
+	if handled, err := applyTargetEndpointData(file.Name, data, targetServers); handled || err != nil {
+		return err
+	}
+	if handled, err := applyProxyEndpointData(file.Name, data, proxyData); handled || err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildBundleEndpoints(targetServers map[string][]string, proxyData map[string]proxyMeta) ([]bundleEndpoint, error) {
 	if len(proxyData) == 0 {
 		return nil, fmt.Errorf("no ProxyEndpoint files found in Apigee bundle")
 	}
 
-	var endpoints []bundleEndpoint
+	endpoints := make([]bundleEndpoint, 0, len(proxyData))
 	for name, meta := range proxyData {
-		var servers []string
-		for _, tgt := range meta.targetRoutes {
-			key := strings.ToLower(strings.TrimSpace(tgt))
-			if key == "" {
-				continue
-			}
-			servers = append(servers, targetServers[key]...)
-		}
+		servers := collectTargetServers(meta.targetRoutes, targetServers)
 		endpoints = append(endpoints, bundleEndpoint{
 			Name:          name,
 			BasePath:      meta.basePath,
@@ -1012,62 +1034,87 @@ func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
 			FlowCount:     meta.flowCount,
 		})
 	}
-
 	return endpoints, nil
+}
+
+func collectTargetServers(targetRoutes []string, targetServers map[string][]string) []string {
+	var servers []string
+	for _, tgt := range targetRoutes {
+		key := strings.ToLower(strings.TrimSpace(tgt))
+		if key == "" {
+			continue
+		}
+		servers = append(servers, targetServers[key]...)
+	}
+	return servers
 }
 
 // FindClosestProxyEndpoint finds the downloaded ProxyEndpoint XML that is most similar to the generated file.
 func FindClosestProxyEndpoint(generatedPath, dir string) (string, float64, error) {
+	baseSignatures, err := readBaseSignatures(generatedPath)
+	if err != nil {
+		return "", 0, err
+	}
+	dir, err = validateDir(dir)
+	if err != nil {
+		return "", 0, err
+	}
+	bestFile, bestScore, err := findClosestProxyEndpointInDir(dir, baseSignatures)
+	if err != nil {
+		return "", 0, err
+	}
+	if bestFile == "" {
+		return "", 0, fmt.Errorf("no XML files found in %s", dir)
+	}
+	return bestFile, bestScore, nil
+}
+
+func readBaseSignatures(generatedPath string) ([]string, error) {
 	generatedPath = strings.TrimSpace(generatedPath)
 	if generatedPath == "" {
-		return "", 0, fmt.Errorf("generated ProxyEndpoint path is empty")
+		return nil, fmt.Errorf("generated ProxyEndpoint path is empty")
 	}
-
 	baseData, err := os.ReadFile(generatedPath)
 	if err != nil {
-		return "", 0, fmt.Errorf("read generated ProxyEndpoint: %w", err)
+		return nil, fmt.Errorf("read generated ProxyEndpoint: %w", err)
 	}
 	baseFlows, err := proxyxml.ParseFlows(baseData)
 	if err != nil {
-		return "", 0, fmt.Errorf("parse generated flows: %w", err)
+		return nil, fmt.Errorf("parse generated flows: %w", err)
 	}
-	baseSignatures := flowSignatures(baseFlows)
+	return flowSignatures(baseFlows), nil
+}
 
+func validateDir(dir string) (string, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		dir = "."
 	}
-
 	info, err := os.Stat(dir)
 	if err != nil {
-		return "", 0, fmt.Errorf("stat download dir: %w", err)
+		return "", fmt.Errorf("stat download dir: %w", err)
 	}
 	if !info.IsDir() {
-		return "", 0, fmt.Errorf("download path is not a directory: %s", dir)
+		return "", fmt.Errorf("download path is not a directory: %s", dir)
 	}
+	return dir, nil
+}
 
+func findClosestProxyEndpointInDir(dir string, baseSignatures []string) (string, float64, error) {
 	var bestFile string
 	var bestScore float64
 
-	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if d.IsDir() {
+		if d.IsDir() || strings.ToLower(filepath.Ext(path)) != ".xml" {
 			return nil
 		}
-		if strings.ToLower(filepath.Ext(path)) != ".xml" {
-			return nil
-		}
-		data, err := os.ReadFile(path)
+		score, err := flowSimilarityForFile(path, baseSignatures)
 		if err != nil {
 			return err
 		}
-		flows, err := proxyxml.ParseFlows(data)
-		if err != nil {
-			return fmt.Errorf("parse flows in %s: %w", path, err)
-		}
-		score := flowSimilarity(baseSignatures, flowSignatures(flows))
 		if score > bestScore {
 			bestScore = score
 			bestFile = path
@@ -1077,10 +1124,19 @@ func FindClosestProxyEndpoint(generatedPath, dir string) (string, float64, error
 	if err != nil {
 		return "", 0, err
 	}
-	if bestFile == "" {
-		return "", 0, fmt.Errorf("no XML files found in %s", dir)
-	}
 	return bestFile, bestScore, nil
+}
+
+func flowSimilarityForFile(path string, baseSignatures []string) (float64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	flows, err := proxyxml.ParseFlows(data)
+	if err != nil {
+		return 0, fmt.Errorf("parse flows in %s: %w", path, err)
+	}
+	return flowSimilarity(baseSignatures, flowSignatures(flows)), nil
 }
 
 func flowSignatures(flows []proxyxml.Flow) []string {

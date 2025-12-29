@@ -310,31 +310,38 @@ func collectAppsByProduct(client ManagementClient, debug bool) (map[string][]str
 			return nil, err
 		}
 		debugLog(debug, "apps page: %d apps (nextStartKey=%q)\n", len(page.Apps), page.NextStartKey)
-		for _, app := range page.Apps {
-			name := firstNonEmpty(app.AppName, app.Name, app.AppID)
-			name = strings.TrimSpace(name)
-			if name == "" {
+		applyAppsToProductMap(page.Apps, appsByProduct)
+		if next := strings.TrimSpace(page.NextStartKey); next == "" {
+			break
+		} else {
+			startKey = next
+		}
+	}
+	finalizeAppsByProduct(appsByProduct)
+	return appsByProduct, nil
+}
+
+func applyAppsToProductMap(apps []orgApp, appsByProduct map[string][]string) {
+	for _, app := range apps {
+		name := strings.TrimSpace(firstNonEmpty(app.AppName, app.Name, app.AppID))
+		if name == "" {
+			continue
+		}
+		products := mergeAppProducts(app)
+		for _, prod := range products {
+			key := strings.ToLower(strings.TrimSpace(prod))
+			if key == "" {
 				continue
 			}
-			products := mergeAppProducts(app)
-			for _, prod := range products {
-				prod = strings.TrimSpace(prod)
-				if prod == "" {
-					continue
-				}
-				key := strings.ToLower(prod)
-				appsByProduct[key] = append(appsByProduct[key], name)
-			}
+			appsByProduct[key] = append(appsByProduct[key], name)
 		}
-		if strings.TrimSpace(page.NextStartKey) == "" {
-			break
-		}
-		startKey = strings.TrimSpace(page.NextStartKey)
 	}
+}
+
+func finalizeAppsByProduct(appsByProduct map[string][]string) {
 	for prod, names := range appsByProduct {
 		appsByProduct[prod] = uniqueSorted(names)
 	}
-	return appsByProduct, nil
 }
 
 func (c *Client) listOrganizationApps(startKey string) (orgAppsPage, error) {

@@ -14,6 +14,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const (
+	syncTargetRequiredErr = "sync requires at least one target: apiproxy, target_server, api_product, or all"
+	noneLabel             = "<none>"
+	deleteFromPrefix      = "DELETE FROM "
+	clearTableFmt         = "clear %s: %w"
+)
+
 type dbConnOptions struct {
 	URL            string
 	RootCertPath   string
@@ -42,7 +49,7 @@ func (s SyncSelection) needsProxyEndpoints() bool {
 func ParseSyncSelection(raw string) (SyncSelection, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return SyncSelection{}, fmt.Errorf("sync requires at least one target: apiproxy, target_server, api_product, or all")
+		return SyncSelection{}, fmt.Errorf(syncTargetRequiredErr)
 	}
 
 	var selection SyncSelection
@@ -68,7 +75,7 @@ func ParseSyncSelection(raw string) (SyncSelection, error) {
 	}
 
 	if !selection.Any() {
-		return SyncSelection{}, fmt.Errorf("sync requires at least one target: apiproxy, target_server, api_product, or all")
+		return SyncSelection{}, fmt.Errorf(syncTargetRequiredErr)
 	}
 	return selection, nil
 }
@@ -86,43 +93,16 @@ func RunSync(cfg ApigeeConfig, args SyncArgs) error {
 
 	selection := args.Selection
 	if !selection.Any() {
-		return fmt.Errorf("sync requires at least one target: apiproxy, target_server, api_product, or all")
+		return fmt.Errorf(syncTargetRequiredErr)
 	}
 
-	dbURL := strings.TrimSpace(args.DBURL)
-	if dbURL == "" {
-		dbURL = strings.TrimSpace(os.Getenv("APIGEE_SYNC_DB_URL"))
-	}
-	if dbURL == "" {
-		dbURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	}
-	if dbURL == "" {
-		return fmt.Errorf("sync requires PostgreSQL connection string via -sync-db-url, APIGEE_SYNC_DB_URL, or DATABASE_URL")
+	dbURL, err := resolveSyncDBURL(args)
+	if err != nil {
+		return err
 	}
 
-	table := DefaultString(args.EndpointsTable, "apigee.apigee_proxy_endpoints")
-	targetTable := DefaultString(args.TargetTable, strings.TrimSpace(os.Getenv("APIGEE_SYNC_TARGET_TABLE")))
-	targetTable = DefaultString(targetTable, "apigee.apigee_target_servers")
-	productsTable := DefaultString(args.ProductsTable, "apigee.apigee_api_products")
-
-	progress := func(p apigee.ProxyScanProgress) {
-		if p.Err != nil {
-			fmt.Printf("[%d/%d] %s (rev %d) error: %v\n", p.Index, p.Total, p.Proxy, p.Revision, p.Err)
-			return
-		}
-		basePaths := "<none>"
-		if len(p.BasePaths) > 0 {
-			basePaths = strings.Join(p.BasePaths, ", ")
-		}
-		envs := "<none>"
-		if len(p.Envs) > 0 {
-			envs = strings.Join(p.Envs, ", ")
-		}
-		if p.EnvError != "" {
-			envs = fmt.Sprintf("%s (env error: %s)", envs, p.EnvError)
-		}
-		fmt.Printf("[%d/%d] %s (rev %d) basepaths: %s envs: %s\n", p.Index, p.Total, p.Proxy, p.Revision, basePaths, envs)
-	}
+	table, targetTable, productsTable := syncTableNames(args)
+	progress := syncProxyScanProgressPrinter()
 
 	dbOpts := dbConnOptions{
 		URL:            dbURL,
@@ -132,113 +112,200 @@ func RunSync(cfg ApigeeConfig, args SyncArgs) error {
 	}
 
 	ctx := context.Background()
-	resolvedURL, err := buildDatabaseURL(dbOpts)
+	pool, err := openDBPool(ctx, dbOpts)
 	if err != nil {
 		return err
 	}
-	pool, err := pgxpool.New(ctx, resolvedURL)
-	if err != nil {
-		return fmt.Errorf("connect to postgres: %w", err)
-	}
 	defer pool.Close()
 
-	var endpoints []apigee.ProxyEndpointRecord
-	if selection.needsProxyEndpoints() {
-		var err error
-		endpoints, err = apigee.CollectProxyEndpoints(apigee.CollectProxyEndpointsOptions{
-			Host:     cfg.Host,
-			Org:      cfg.Org,
-			Token:    cfg.Token,
-			Progress: progress,
-		})
-		if err != nil {
-			return fmt.Errorf("collect proxy endpoints: %w", err)
-		}
-		fmt.Printf("Fetched %d proxy endpoint(s) from Apigee\n", len(endpoints))
-
-		if selection.ProxyEndpoints {
-			if err := syncProxyEndpoints(ctx, pool, table, endpoints); err != nil {
-				return fmt.Errorf("sync proxy endpoints to PostgreSQL: %w", err)
-			}
-			fmt.Printf("Updated %d proxy endpoint(s) in %s\n", len(endpoints), table)
-		} else {
-			fmt.Println("Skipped proxy endpoint sync (not requested)")
-		}
+	endpoints, err := collectProxyEndpointsIfNeeded(cfg, selection, progress)
+	if err != nil {
+		return err
 	}
-
-	if selection.TargetServers {
-		tsRecords, err := apigee.CollectTargetServers(apigee.CollectTargetServersOptions{
-			Host:      cfg.Host,
-			Org:       cfg.Org,
-			Token:     cfg.Token,
-			Endpoints: endpoints,
-			Progress: func(p apigee.TargetServerProgress) {
-				if p.Total == 0 {
-					return
-				}
-				url := strings.TrimSpace(p.URL)
-				if url == "" {
-					url = "<unknown>"
-				}
-				if p.Err != nil {
-					fmt.Printf("[%d/%d] target %s/%s url: %s error: %v\n", p.Index, p.Total, p.Environment, p.Name, url, p.Err)
-					return
-				}
-				fmt.Printf("[%d/%d] target %s/%s url: %s\n", p.Index, p.Total, p.Environment, p.Name, url)
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("collect target servers: %w", err)
-		}
-		fmt.Printf("Fetched %d target server(s) from Apigee\n", len(tsRecords))
-		if err := syncTargetServers(ctx, pool, targetTable, tsRecords); err != nil {
-			return fmt.Errorf("sync target servers to PostgreSQL: %w", err)
-		}
-		fmt.Printf("Updated %d target server(s) in %s\n", len(tsRecords), targetTable)
-	} else {
-		fmt.Println("Skipped target server sync (not requested)")
+	if err := syncProxyEndpointsIfRequested(ctx, pool, selection, table, endpoints); err != nil {
+		return err
 	}
-
-	if selection.APIProducts {
-		products, err := apigee.CollectAPIProducts(apigee.CollectAPIProductsOptions{
-			Host:  cfg.Host,
-			Org:   cfg.Org,
-			Token: cfg.Token,
-			Progress: func(p apigee.APIProductProgress) {
-				envs := "<none>"
-				if len(p.Environments) > 0 {
-					envs = strings.Join(p.Environments, ", ")
-				}
-				proxies := "<none>"
-				if len(p.Proxies) > 0 {
-					proxies = strings.Join(p.Proxies, ", ")
-				}
-				if p.Err != nil {
-					fmt.Printf("[%d/%d] product %s envs: %s proxies: %s apps: %d error: %v\n", p.Index, p.Total, p.Name, envs, proxies, p.Apps, p.Err)
-					return
-				}
-				fmt.Printf("[%d/%d] product %s envs: %s proxies: %s apps: %d\n", p.Index, p.Total, p.Name, envs, proxies, p.Apps)
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("collect api products: %w", err)
-		}
-		fmt.Printf("Fetched %d api product(s) from Apigee\n", len(products))
-		if err := syncAPIProducts(ctx, pool, productsTable, products); err != nil {
-			return fmt.Errorf("sync api products to PostgreSQL: %w", err)
-		}
-		fmt.Printf("Updated %d api product(s) in %s\n", len(products), productsTable)
-	} else {
-		fmt.Println("Skipped api product sync (not requested)")
+	if err := syncTargetServersIfRequested(ctx, pool, selection, targetTable, cfg, endpoints); err != nil {
+		return err
+	}
+	if err := syncAPIProductsIfRequested(ctx, pool, selection, productsTable, cfg); err != nil {
+		return err
 	}
 
 	return nil
 }
 
+func resolveSyncDBURL(args SyncArgs) (string, error) {
+	dbURL := strings.TrimSpace(args.DBURL)
+	if dbURL == "" {
+		dbURL = strings.TrimSpace(os.Getenv("APIGEE_SYNC_DB_URL"))
+	}
+	if dbURL == "" {
+		dbURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	}
+	if dbURL == "" {
+		return "", fmt.Errorf("sync requires PostgreSQL connection string via -sync-db-url, APIGEE_SYNC_DB_URL, or DATABASE_URL")
+	}
+	return dbURL, nil
+}
+
+func syncTableNames(args SyncArgs) (string, string, string) {
+	table := DefaultString(args.EndpointsTable, "apigee.apigee_proxy_endpoints")
+	targetTable := DefaultString(args.TargetTable, strings.TrimSpace(os.Getenv("APIGEE_SYNC_TARGET_TABLE")))
+	targetTable = DefaultString(targetTable, "apigee.apigee_target_servers")
+	productsTable := DefaultString(args.ProductsTable, "apigee.apigee_api_products")
+	return table, targetTable, productsTable
+}
+
+func syncProxyScanProgressPrinter() func(apigee.ProxyScanProgress) {
+	return func(p apigee.ProxyScanProgress) {
+		if p.Err != nil {
+			fmt.Printf("[%d/%d] %s (rev %d) error: %v\n", p.Index, p.Total, p.Proxy, p.Revision, p.Err)
+			return
+		}
+		basePaths := noneLabel
+		if len(p.BasePaths) > 0 {
+			basePaths = strings.Join(p.BasePaths, ", ")
+		}
+		envs := noneLabel
+		if len(p.Envs) > 0 {
+			envs = strings.Join(p.Envs, ", ")
+		}
+		if p.EnvError != "" {
+			envs = fmt.Sprintf("%s (env error: %s)", envs, p.EnvError)
+		}
+		fmt.Printf("[%d/%d] %s (rev %d) basepaths: %s envs: %s\n", p.Index, p.Total, p.Proxy, p.Revision, basePaths, envs)
+	}
+}
+
+func targetServerProgressPrinter() func(apigee.TargetServerProgress) {
+	return func(p apigee.TargetServerProgress) {
+		if p.Total == 0 {
+			return
+		}
+		url := strings.TrimSpace(p.URL)
+		if url == "" {
+			url = "<unknown>"
+		}
+		if p.Err != nil {
+			fmt.Printf("[%d/%d] target %s/%s url: %s error: %v\n", p.Index, p.Total, p.Environment, p.Name, url, p.Err)
+			return
+		}
+		fmt.Printf("[%d/%d] target %s/%s url: %s\n", p.Index, p.Total, p.Environment, p.Name, url)
+	}
+}
+
+func apiProductProgressPrinter() func(apigee.APIProductProgress) {
+	return func(p apigee.APIProductProgress) {
+		envs := noneLabel
+		if len(p.Environments) > 0 {
+			envs = strings.Join(p.Environments, ", ")
+		}
+		proxies := noneLabel
+		if len(p.Proxies) > 0 {
+			proxies = strings.Join(p.Proxies, ", ")
+		}
+		if p.Err != nil {
+			fmt.Printf("[%d/%d] product %s envs: %s proxies: %s apps: %d error: %v\n", p.Index, p.Total, p.Name, envs, proxies, p.Apps, p.Err)
+			return
+		}
+		fmt.Printf("[%d/%d] product %s envs: %s proxies: %s apps: %d\n", p.Index, p.Total, p.Name, envs, proxies, p.Apps)
+	}
+}
+
+func openDBPool(ctx context.Context, opts dbConnOptions) (*pgxpool.Pool, error) {
+	resolvedURL, err := buildDatabaseURL(opts)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.New(ctx, resolvedURL)
+	if err != nil {
+		return nil, fmt.Errorf("connect to postgres: %w", err)
+	}
+	return pool, nil
+}
+
+func collectProxyEndpointsIfNeeded(cfg ApigeeConfig, selection SyncSelection, progress func(apigee.ProxyScanProgress)) ([]apigee.ProxyEndpointRecord, error) {
+	if !selection.needsProxyEndpoints() {
+		return nil, nil
+	}
+	endpoints, err := apigee.CollectProxyEndpoints(apigee.CollectProxyEndpointsOptions{
+		Host:     cfg.Host,
+		Org:      cfg.Org,
+		Token:    cfg.Token,
+		Progress: progress,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collect proxy endpoints: %w", err)
+	}
+	fmt.Printf("Fetched %d proxy endpoint(s) from Apigee\n", len(endpoints))
+	return endpoints, nil
+}
+
+func syncProxyEndpointsIfRequested(ctx context.Context, pool *pgxpool.Pool, selection SyncSelection, table string, endpoints []apigee.ProxyEndpointRecord) error {
+	if !selection.needsProxyEndpoints() {
+		return nil
+	}
+	if selection.ProxyEndpoints {
+		if err := syncProxyEndpoints(ctx, pool, table, endpoints); err != nil {
+			return fmt.Errorf("sync proxy endpoints to PostgreSQL: %w", err)
+		}
+		fmt.Printf("Updated %d proxy endpoint(s) in %s\n", len(endpoints), table)
+	} else {
+		fmt.Println("Skipped proxy endpoint sync (not requested)")
+	}
+	return nil
+}
+
+func syncTargetServersIfRequested(ctx context.Context, pool *pgxpool.Pool, selection SyncSelection, targetTable string, cfg ApigeeConfig, endpoints []apigee.ProxyEndpointRecord) error {
+	if !selection.TargetServers {
+		fmt.Println("Skipped target server sync (not requested)")
+		return nil
+	}
+	tsRecords, err := apigee.CollectTargetServers(apigee.CollectTargetServersOptions{
+		Host:      cfg.Host,
+		Org:       cfg.Org,
+		Token:     cfg.Token,
+		Endpoints: endpoints,
+		Progress:  targetServerProgressPrinter(),
+	})
+	if err != nil {
+		return fmt.Errorf("collect target servers: %w", err)
+	}
+	fmt.Printf("Fetched %d target server(s) from Apigee\n", len(tsRecords))
+	if err := syncTargetServers(ctx, pool, targetTable, tsRecords); err != nil {
+		return fmt.Errorf("sync target servers to PostgreSQL: %w", err)
+	}
+	fmt.Printf("Updated %d target server(s) in %s\n", len(tsRecords), targetTable)
+	return nil
+}
+
+func syncAPIProductsIfRequested(ctx context.Context, pool *pgxpool.Pool, selection SyncSelection, productsTable string, cfg ApigeeConfig) error {
+	if !selection.APIProducts {
+		fmt.Println("Skipped api product sync (not requested)")
+		return nil
+	}
+	products, err := apigee.CollectAPIProducts(apigee.CollectAPIProductsOptions{
+		Host:     cfg.Host,
+		Org:      cfg.Org,
+		Token:    cfg.Token,
+		Progress: apiProductProgressPrinter(),
+	})
+	if err != nil {
+		return fmt.Errorf("collect api products: %w", err)
+	}
+	fmt.Printf("Fetched %d api product(s) from Apigee\n", len(products))
+	if err := syncAPIProducts(ctx, pool, productsTable, products); err != nil {
+		return fmt.Errorf("sync api products to PostgreSQL: %w", err)
+	}
+	fmt.Printf("Updated %d api product(s) in %s\n", len(products), productsTable)
+	return nil
+}
+
 func syncProxyEndpoints(ctx context.Context, pool *pgxpool.Pool, table string, endpoints []apigee.ProxyEndpointRecord) error {
 	return withTx(ctx, pool, table, func(ctx context.Context, tx pgx.Tx, quotedTable string) error {
-		if _, err := tx.Exec(ctx, "DELETE FROM "+quotedTable); err != nil {
-			return fmt.Errorf("clear %s: %w", quotedTable, err)
+		if _, err := tx.Exec(ctx, deleteFromPrefix+quotedTable); err != nil {
+			return fmt.Errorf(clearTableFmt, quotedTable, err)
 		}
 
 		insertSQL := fmt.Sprintf(
@@ -246,27 +313,21 @@ func syncProxyEndpoints(ctx context.Context, pool *pgxpool.Pool, table string, e
 			quotedTable,
 		)
 		snapshot := time.Now().UTC()
-		for _, ep := range endpoints {
-			servers := ep.Targets
-			if servers == nil {
-				servers = []string{}
-			}
-			envs := ep.Envs
-			if envs == nil {
-				envs = []string{}
-			}
-			if _, err := tx.Exec(ctx, insertSQL, ep.Proxy, ep.Endpoint, ep.Revision, ep.BasePath, servers, envs, ep.Flows, snapshot); err != nil {
-				return fmt.Errorf("insert %s.%s: %w", ep.Proxy, ep.Endpoint, err)
-			}
+	for _, ep := range endpoints {
+		servers := normalizeStringSlice(ep.Targets)
+		envs := normalizeStringSlice(ep.Envs)
+		if _, err := tx.Exec(ctx, insertSQL, ep.Proxy, ep.Endpoint, ep.Revision, ep.BasePath, servers, envs, ep.Flows, snapshot); err != nil {
+			return fmt.Errorf("insert %s.%s: %w", ep.Proxy, ep.Endpoint, err)
 		}
+	}
 		return nil
 	})
 }
 
 func syncTargetServers(ctx context.Context, pool *pgxpool.Pool, table string, servers []apigee.TargetServerRecord) error {
 	return withTx(ctx, pool, table, func(ctx context.Context, tx pgx.Tx, quotedTable string) error {
-		if _, err := tx.Exec(ctx, "DELETE FROM "+quotedTable); err != nil {
-			return fmt.Errorf("clear %s: %w", quotedTable, err)
+		if _, err := tx.Exec(ctx, deleteFromPrefix+quotedTable); err != nil {
+			return fmt.Errorf(clearTableFmt, quotedTable, err)
 		}
 
 		insertSQL := fmt.Sprintf(
@@ -285,8 +346,8 @@ func syncTargetServers(ctx context.Context, pool *pgxpool.Pool, table string, se
 
 func syncAPIProducts(ctx context.Context, pool *pgxpool.Pool, table string, products []apigee.APIProductRecord) error {
 	return withTx(ctx, pool, table, func(ctx context.Context, tx pgx.Tx, quotedTable string) error {
-		if _, err := tx.Exec(ctx, "DELETE FROM "+quotedTable); err != nil {
-			return fmt.Errorf("clear %s: %w", quotedTable, err)
+		if _, err := tx.Exec(ctx, deleteFromPrefix+quotedTable); err != nil {
+			return fmt.Errorf(clearTableFmt, quotedTable, err)
 		}
 
 		insertSQL := fmt.Sprintf(
@@ -295,24 +356,22 @@ func syncAPIProducts(ctx context.Context, pool *pgxpool.Pool, table string, prod
 		)
 		now := time.Now().UTC()
 		for _, prod := range products {
-			envs := prod.Environments
-			if envs == nil {
-				envs = []string{}
-			}
-			proxies := prod.Proxies
-			if proxies == nil {
-				proxies = []string{}
-			}
-			apps := prod.Apps
-			if apps == nil {
-				apps = []string{}
-			}
+			envs := normalizeStringSlice(prod.Environments)
+			proxies := normalizeStringSlice(prod.Proxies)
+			apps := normalizeStringSlice(prod.Apps)
 			if _, err := tx.Exec(ctx, insertSQL, prod.Name, envs, proxies, apps, now); err != nil {
 				return fmt.Errorf("insert api product %s: %w", prod.Name, err)
 			}
 		}
 		return nil
 	})
+}
+
+func normalizeStringSlice(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 type syncExec func(ctx context.Context, tx pgx.Tx, quotedTable string) error

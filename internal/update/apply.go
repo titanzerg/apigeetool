@@ -19,32 +19,65 @@ func ConfirmApply() (bool, error) {
 
 // ReplaceProxyEndpoint updates only the <Flows> section of the target file with the generated contents.
 func ReplaceProxyEndpoint(generatedPath, targetPath string) error {
-	genData, err := os.ReadFile(generatedPath)
+	genData, targetData, err := readProxyEndpointFiles(generatedPath, targetPath)
 	if err != nil {
 		return err
+	}
+	targetSegment, err := requireFlowsSegments(genData, targetData)
+	if err != nil {
+		return err
+	}
+	generatedFlows, targetFlows, err := parseFlowDetailsPair(genData, targetData)
+	if err != nil {
+		return err
+	}
+	merged := mergeFlows(generatedFlows, targetFlows)
+	updated := replaceFlowsSegment(targetData, targetSegment, merged)
+
+	formatted, err := formatXML(updated)
+	if err != nil {
+		return fmt.Errorf("format merged ProxyEndpoint: %w", err)
+	}
+
+	return os.WriteFile(targetPath, formatted, 0o644)
+}
+
+func readProxyEndpointFiles(generatedPath, targetPath string) ([]byte, []byte, error) {
+	genData, err := os.ReadFile(generatedPath)
+	if err != nil {
+		return nil, nil, err
 	}
 	targetData, err := os.ReadFile(targetPath)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
+	return genData, targetData, nil
+}
 
+func requireFlowsSegments(genData, targetData []byte) (flowsSegment, error) {
 	if _, err := locateFlowsSegment(genData); err != nil {
-		return fmt.Errorf("generated ProxyEndpoint missing <Flows>: %w", err)
+		return flowsSegment{}, fmt.Errorf("generated ProxyEndpoint missing <Flows>: %w", err)
 	}
 	targetSegment, err := locateFlowsSegment(targetData)
 	if err != nil {
-		return fmt.Errorf("target ProxyEndpoint missing <Flows>: %w", err)
+		return flowsSegment{}, fmt.Errorf("target ProxyEndpoint missing <Flows>: %w", err)
 	}
+	return targetSegment, nil
+}
 
+func parseFlowDetailsPair(genData, targetData []byte) ([]flowDetails, []flowDetails, error) {
 	generatedFlows, err := parseFlowDetails(genData)
 	if err != nil {
-		return fmt.Errorf("parse generated ProxyEndpoint flows: %w", err)
+		return nil, nil, fmt.Errorf("parse generated ProxyEndpoint flows: %w", err)
 	}
 	targetFlows, err := parseFlowDetails(targetData)
 	if err != nil {
-		return fmt.Errorf("parse target ProxyEndpoint flows: %w", err)
+		return nil, nil, fmt.Errorf("parse target ProxyEndpoint flows: %w", err)
 	}
+	return generatedFlows, targetFlows, nil
+}
 
+func mergeFlows(generatedFlows, targetFlows []flowDetails) []byte {
 	targetFlowMap := make(map[string]flowDetails, len(targetFlows))
 	for _, fl := range targetFlows {
 		targetFlowMap[fl.Name] = fl
@@ -82,20 +115,18 @@ func ReplaceProxyEndpoint(generatedPath, targetPath string) error {
 		}
 	}
 
+	return merged.Bytes()
+}
+
+func replaceFlowsSegment(targetData []byte, targetSegment flowsSegment, merged []byte) []byte {
 	var buf bytes.Buffer
-	buf.Grow(len(targetData) - (targetSegment.End - targetSegment.Start) + merged.Len())
+	buf.Grow(len(targetData) - (targetSegment.End - targetSegment.Start) + len(merged))
 	buf.Write(targetData[:targetSegment.Start])
 	buf.Write(targetSegment.OpenTag)
-	buf.Write(merged.Bytes())
+	buf.Write(merged)
 	buf.Write(targetSegment.CloseTag)
 	buf.Write(targetData[targetSegment.End:])
-
-	formatted, err := formatXML(buf.Bytes())
-	if err != nil {
-		return fmt.Errorf("format merged ProxyEndpoint: %w", err)
-	}
-
-	return os.WriteFile(targetPath, formatted, 0o644)
+	return buf.Bytes()
 }
 
 func confirmApply(in io.Reader, out io.Writer) (bool, error) {
@@ -339,49 +370,59 @@ func formatXML(raw []byte) ([]byte, error) {
 	enc := xml.NewEncoder(&buf)
 	enc.Indent("", indentUnit)
 
-	for {
-		tok, err := dec.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch t := tok.(type) {
-		case xml.CharData:
-			// Drop purely whitespace-only text nodes to avoid double-blank lines.
-			if strings.TrimSpace(string(t)) == "" {
-				continue
-			}
-			trimmed := xml.CharData(strings.TrimSpace(string(t)))
-			if err := enc.EncodeToken(trimmed); err != nil {
-				return nil, err
-			}
-		default:
-			if err := enc.EncodeToken(tok); err != nil {
-				return nil, err
-			}
-		}
+	if err := encodeXMLTokens(dec, enc); err != nil {
+		return nil, err
 	}
 	if err := enc.Flush(); err != nil {
 		return nil, err
 	}
 	buf.WriteByte('\n')
-	out := buf.String()
+	return []byte(normalizeXMLWhitespace(buf.String())), nil
+}
+
+func encodeXMLTokens(dec *xml.Decoder, enc *xml.Encoder) error {
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := encodeXMLToken(enc, tok); err != nil {
+			return err
+		}
+	}
+}
+
+func encodeXMLToken(enc *xml.Encoder, tok xml.Token) error {
+	if text, ok := tok.(xml.CharData); ok {
+		// Drop purely whitespace-only text nodes to avoid double-blank lines.
+		if strings.TrimSpace(string(text)) == "" {
+			return nil
+		}
+		tok = xml.CharData(strings.TrimSpace(string(text)))
+	}
+	return enc.EncodeToken(tok)
+}
+
+func normalizeXMLWhitespace(out string) string {
 	out = strings.ReplaceAll(out, "<Request></Request>", "<Request/>")
 	out = strings.ReplaceAll(out, "<Response></Response>", "<Response/>")
 	out = strings.ReplaceAll(out, "&#34;", `"`)
 	out = strings.ReplaceAll(out, "&quot;", `"`)
-	return []byte(out), nil
+	return out
 }
 
 func escapeAttr(value string) string {
-	var buf strings.Builder
-	xml.EscapeText(&buf, []byte(value))
-	return buf.String()
+	return escapeXML(value)
 }
 
 func escapeText(value string) string {
+	return escapeXML(value)
+}
+
+func escapeXML(value string) string {
 	var buf strings.Builder
 	xml.EscapeText(&buf, []byte(value))
 	return buf.String()

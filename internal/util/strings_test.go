@@ -2,16 +2,21 @@ package util
 
 import "testing"
 
+const (
+	lenMismatchFmt = "len = %d, want %d"
+	gotMismatchFmt = "got[%d]=%q, want %q"
+)
+
 func TestTrimStrings(t *testing.T) {
 	in := []string{" a ", " ", "", "\t", "b"}
 	got := TrimStrings(in)
 	want := []string{"a", "b"}
 	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d", len(got), len(want))
+		t.Fatalf(lenMismatchFmt, len(got), len(want))
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("got[%d]=%q, want %q", i, got[i], want[i])
+			t.Fatalf(gotMismatchFmt, i, got[i], want[i])
 		}
 	}
 }
@@ -21,11 +26,11 @@ func TestUniqueSortedStrings(t *testing.T) {
 	got := UniqueSortedStrings(in)
 	want := []string{"B", "a", "c"}
 	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d", len(got), len(want))
+		t.Fatalf(lenMismatchFmt, len(got), len(want))
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("got[%d]=%q, want %q", i, got[i], want[i])
+			t.Fatalf(gotMismatchFmt, i, got[i], want[i])
 		}
 	}
 }
@@ -36,11 +41,11 @@ func TestMergeAndUnique(t *testing.T) {
 	got := MergeAndUnique(base, extra)
 	want := []string{"a", "b", "c"}
 	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d", len(got), len(want))
+		t.Fatalf(lenMismatchFmt, len(got), len(want))
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("got[%d]=%q, want %q", i, got[i], want[i])
+			t.Fatalf(gotMismatchFmt, i, got[i], want[i])
 		}
 	}
 }
@@ -50,11 +55,11 @@ func TestUniqueStrings(t *testing.T) {
 	got := UniqueStrings(in)
 	want := []string{"A", "B", "c"}
 	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d", len(got), len(want))
+		t.Fatalf(lenMismatchFmt, len(got), len(want))
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("got[%d]=%q, want %q", i, got[i], want[i])
+			t.Fatalf(gotMismatchFmt, i, got[i], want[i])
 		}
 	}
 }
