@@ -34,6 +34,7 @@ type DownloadOptions struct {
 	// Artifact selection for DownloadProxyArtifacts.
 	IncludeProxyEndpoints  bool
 	IncludeTargetEndpoints bool
+	IncludePolicies        bool
 	IncludeResources       bool
 	PreserveStructure      bool
 }
@@ -76,10 +77,11 @@ func DownloadProxyArtifacts(opts DownloadOptions) error {
 	selection := extractOptions{
 		IncludeProxyEndpoints:  opts.IncludeProxyEndpoints,
 		IncludeTargetEndpoints: opts.IncludeTargetEndpoints,
+		IncludePolicies:        opts.IncludePolicies,
 		IncludeResources:       opts.IncludeResources,
 		PreserveStructure:      opts.PreserveStructure,
 	}
-	if !selection.IncludeProxyEndpoints && !selection.IncludeTargetEndpoints && !selection.IncludeResources {
+	if !selection.IncludeProxyEndpoints && !selection.IncludeTargetEndpoints && !selection.IncludePolicies && !selection.IncludeResources {
 		selection.IncludeProxyEndpoints = true
 	}
 
@@ -463,6 +465,7 @@ func extractError(resp *http.Response) string {
 type extractOptions struct {
 	IncludeProxyEndpoints  bool
 	IncludeTargetEndpoints bool
+	IncludePolicies        bool
 	IncludeResources       bool
 	PreserveStructure      bool
 }
@@ -560,6 +563,7 @@ type artifactKind int
 const (
 	artifactProxyEndpoint artifactKind = iota
 	artifactTargetEndpoint
+	artifactPolicy
 	artifactResource
 )
 
@@ -575,6 +579,12 @@ func classifyArtifact(name string, opts extractOptions) (artifactKind, string, b
 			return artifactTargetEndpoint, "", false
 		}
 		return artifactTargetEndpoint, prefix, true
+	}
+	if prefix, ok := policyPrefix(name); ok {
+		if !opts.IncludePolicies {
+			return artifactPolicy, "", false
+		}
+		return artifactPolicy, prefix, true
 	}
 	if strings.HasPrefix(name, "apiproxy/resources/") {
 		if !opts.IncludeResources {
@@ -620,6 +630,16 @@ func targetEndpointPrefix(name string) (string, bool) {
 		if strings.HasPrefix(name, prefix) {
 			return prefix, true
 		}
+	}
+	return "", false
+}
+
+func policyPrefix(name string) (string, bool) {
+	if strings.HasPrefix(name, "apiproxy/policies/") {
+		return "apiproxy/policies/", true
+	}
+	if strings.HasPrefix(name, "apiproxy/policy/") {
+		return "apiproxy/policy/", true
 	}
 	return "", false
 }

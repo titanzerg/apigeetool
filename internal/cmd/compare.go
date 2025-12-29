@@ -70,6 +70,8 @@ type compareArtifactSets struct {
 	RightTarget   map[string]string
 	LeftResource  map[string]string
 	RightResource map[string]string
+	LeftPolicy    map[string]string
+	RightPolicy   map[string]string
 }
 
 func validateCompareArgs(cfg ApigeeConfig, args CompareArgs) (string, error) {
@@ -79,6 +81,9 @@ func validateCompareArgs(cfg ApigeeConfig, args CompareArgs) (string, error) {
 	}
 	if args.RevisionA <= 0 || args.RevisionB <= 0 {
 		return "", fmt.Errorf("compare requires two positive revision numbers")
+	}
+	if args.RevisionA > args.RevisionB {
+		return "", fmt.Errorf("compare expects older revision first. Run: go run . -p %s -c %d %d", proxy, args.RevisionB, args.RevisionA)
 	}
 	if err := RequireApigeeAuth(cfg, "comparing proxies"); err != nil {
 		return "", err
@@ -124,6 +129,7 @@ func downloadCompareRevision(cfg ApigeeConfig, proxy string, revision int, outpu
 		Quiet:                  true,
 		IncludeProxyEndpoints:  true,
 		IncludeTargetEndpoints: true,
+		IncludePolicies:        true,
 		IncludeResources:       true,
 		PreserveStructure:      true,
 	}); err != nil {
@@ -157,6 +163,14 @@ func buildCompareContext(leftDir, rightDir string, args CompareArgs) (compareArt
 	if err != nil {
 		return compareArtifactSets{}, compareLabels{}, err
 	}
+	leftPolicyFiles, err := collectFilesByPrefixes(leftDir, policyPrefixes(), false)
+	if err != nil {
+		return compareArtifactSets{}, compareLabels{}, err
+	}
+	rightPolicyFiles, err := collectFilesByPrefixes(rightDir, policyPrefixes(), false)
+	if err != nil {
+		return compareArtifactSets{}, compareLabels{}, err
+	}
 
 	labels := compareLabels{
 		Left:  fmt.Sprintf("revision %d", args.RevisionA),
@@ -169,6 +183,8 @@ func buildCompareContext(leftDir, rightDir string, args CompareArgs) (compareArt
 		RightTarget:   rightTargetFiles,
 		LeftResource:  leftResourceFiles,
 		RightResource: rightResourceFiles,
+		LeftPolicy:    leftPolicyFiles,
+		RightPolicy:   rightPolicyFiles,
 	}
 	return fileSets, labels, nil
 }
@@ -199,7 +215,11 @@ func compareTargetsAndResources(files compareArtifactSets, labels compareLabels,
 	if err != nil {
 		return diffFound, err
 	}
-	return diffFound || targetDiff || resourceDiff, nil
+	policyDiff, err := compareResourceArtifacts(files.LeftPolicy, files.RightPolicy, labels.Left, labels.Right)
+	if err != nil {
+		return diffFound, err
+	}
+	return diffFound || targetDiff || resourceDiff || policyDiff, nil
 }
 
 func markOnlyInSide(label string, labels compareLabels, onlyLeft, onlyRight []string) bool {
@@ -379,10 +399,15 @@ func compareResourceArtifacts(left, right map[string]string, leftSide, rightSide
 		if err != nil {
 			return false, fmt.Errorf(errReadFileFmt, rightPath, err)
 		}
-		if !bytes.Equal(leftData, rightData) {
-			printUnifiedDiff("Resource", rel, leftPath, rightPath)
-			diffFound = true
+		if strings.EqualFold(filepath.Ext(rel), ".xml") {
+			if normalizeWhitespace(string(leftData)) == normalizeWhitespace(string(rightData)) {
+				continue
+			}
+		} else if bytes.Equal(leftData, rightData) {
+			continue
 		}
+		printUnifiedDiff("Resource", rel, leftPath, rightPath)
+		diffFound = true
 	}
 	return diffFound, nil
 }
@@ -397,7 +422,7 @@ func printUnifiedDiff(label, rel, leftPath, rightPath string) {
 		fmt.Printf(differsOutputFmt, label, rel)
 		return
 	}
-	cmd := exec.Command(diffPath, "-u", leftPath, rightPath)
+	cmd := exec.Command(diffPath, "-u", "-U0", leftPath, rightPath)
 	output, err := cmd.CombinedOutput()
 	if len(output) == 0 {
 		fmt.Printf(differsOutputFmt, label, rel)
@@ -443,5 +468,12 @@ func targetEndpointPrefixes() []string {
 func resourcePrefixes() []string {
 	return []string{
 		"resources/",
+	}
+}
+
+func policyPrefixes() []string {
+	return []string{
+		"policies/",
+		"policy/",
 	}
 }

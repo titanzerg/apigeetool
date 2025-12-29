@@ -10,11 +10,11 @@ func PrintFlowDiffWithLabels(diff proxyxml.FlowDiff, leftLabel, rightLabel strin
 	}
 
 	if len(diff.Missing) > 0 {
-		printFlowListWithLabel("Flows only in %s:\n", leftLabel, diff.Missing)
+		printFlowListWithLabel("Flows only in %s:\n", leftLabel, diff.Missing, "-")
 	}
 
 	if len(diff.Extra) > 0 {
-		printFlowListWithLabel("Flows only in %s:\n", rightLabel, diff.Extra)
+		printFlowListWithLabel("Flows only in %s:\n", rightLabel, diff.Extra, "+")
 	}
 
 	if len(diff.Changed) > 0 {

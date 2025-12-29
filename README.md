@@ -61,7 +61,7 @@ go run . \
 | `-apigee-host` | base URL ของ Apigee Management API (default `https://apigee.googleapis.com`) |
 | `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints` และจะลบไฟล์เดิมทุกครั้งก่อนดาวน์โหลดใหม่) |
 | `-findproxy` / `-f` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ค้นหาแบบ contains, ไม่สร้างไฟล์ใหม่) |
-| `-compare` / `-c` | เปรียบเทียบ proxy สอง revision (ต้องระบุ `-proxy` และตัวเลข revision 2 ค่า) |
+| `-compare` / `-c` | เปรียบเทียบ proxy สอง revision (ต้องระบุ `-proxy` และตัวเลข revision 2 ค่า โดยใส่ revision เก่าก่อนใหม่) |
 | `-db-url` | ใส่ PostgreSQL connection URL เพื่อใช้ทั้ง `-sync` และ `-findproxy` (default อ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL`) |
 | `-db-ssl-rootcert` / `-db-ssl-cert` / `-db-ssl-key` | ตั้งค่าไฟล์ TLS สำหรับเชื่อมต่อ DB (ใช้ร่วมทั้ง `-sync` และ `-findproxy`) default อ่านจากตัวแปร `APIGEE_SYNC_DB_SSL_*` |
 | `-endpoints-table` | ชื่อตาราง proxy endpoints ใน Postgres ใช้ร่วมทั้ง `-sync` และ `-findproxy` (default `apigee.apigee_proxy_endpoints`) |
@@ -185,7 +185,7 @@ CLI จะดึงผลจากตาราง `apigee.apigee_proxy_endpoints
 
 ### โหมดเปรียบเทียบสอง revision ของ proxy (`-compare`)
 
-ใช้สำหรับเปรียบเทียบไฟล์ ProxyEndpoint/TargetEndpoint/Resources ระหว่างสอง revision ของ proxy เดียวกัน โดยต้องระบุชื่อ proxy และตัวเลข revision 2 ค่า
+ใช้สำหรับเปรียบเทียบไฟล์ ProxyEndpoint/TargetEndpoint/Policies/Resources ระหว่างสอง revision ของ proxy เดียวกัน โดยต้องระบุชื่อ proxy และตัวเลข revision 2 ค่า (ใส่ revision เก่าก่อนใหม่)
 
 ตัวอย่าง (alias `-c` ใช้งานได้เหมือนกัน):
 
@@ -197,13 +197,15 @@ go run . -compare -proxy my-proxy 12 11
 
 สิ่งที่คำสั่งทำ:
 
-1. ดาวน์โหลด bundle ของ revision 12 และ 11 ลงโฟลเดอร์ `downloaded-proxy-endpoints/compare-rev-12` และ `downloaded-proxy-endpoints/compare-rev-11`
-2. เปรียบเทียบไฟล์ ProxyEndpoint (รวม BasePath และ Flow diff), TargetEndpoint และ Resources
-3. สรุปความต่างด้วยข้อความ เช่น “only in …” หรือ “differs” หากมีเครื่องมือ `diff` จะพิมพ์ unified diff ให้ด้วย (รวมไฟล์ Resources)
+1. ดาวน์โหลด bundle ของ revision 11 และ 12 ลงโฟลเดอร์ `downloaded-proxy-endpoints/compare-rev-11` และ `downloaded-proxy-endpoints/compare-rev-12`
+2. เปรียบเทียบไฟล์ ProxyEndpoint (รวม BasePath และ Flow diff), TargetEndpoint, Policies และ Resources
+3. สรุปความต่างด้วยข้อความ เช่น “only in …” หรือ “differs” หากมีเครื่องมือ `diff` จะพิมพ์ unified diff ให้ด้วย (รวมไฟล์ Policies/Resources)
 
 หมายเหตุ:
 - ต้องมีสิทธิ์อ่าน proxy bundle และมี token ใช้งานได้
 - ถ้าไม่พบความต่าง ระบบจะแสดง “No differences detected.”
+- แสดง unified diff เฉพาะบรรทัดที่เปลี่ยน (ไม่มี context) และไฟล์ XML ที่ต่างเฉพาะ indent จะไม่ถือว่าต่าง
+- รายการ “Flows only in …” จะแสดงด้วยสัญลักษณ์ `+`/`-` เพื่อให้ตรงกับความหมายของ diff
 
 ## เคล็ดลับ & การดีบัก
 

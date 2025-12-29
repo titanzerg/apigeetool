@@ -13,10 +13,10 @@ func printFlowList(header string, flows []proxyxml.Flow) {
 	}
 }
 
-func printFlowListWithLabel(headerFmt, label string, flows []proxyxml.Flow) {
+func printFlowListWithLabel(headerFmt, label string, flows []proxyxml.Flow, prefix string) {
 	fmt.Printf(headerFmt, label)
 	for _, fl := range flows {
-		fmt.Printf("- %s (%s)\n", fl.Name, fl.Condition)
+		fmt.Printf("%s %s (%s)\n", prefix, fl.Name, fl.Condition)
 	}
 }
 
