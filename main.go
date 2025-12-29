@@ -67,7 +67,6 @@ func run() error {
 		targetsTable   = flag.String("targets-table", "apigee.apigee_target_servers", "PostgreSQL table for target servers (sync mode)")
 		productsTable  = flag.String("products-table", "apigee.apigee_api_products", "PostgreSQL table for API products (sync mode)")
 		compareMode    = flag.Bool("compare", false, "Compare two Apigee proxy revisions (requires -proxy and two revision numbers)")
-		deployMode     = flag.Bool("deploy", false, "Deploy updated proxy revision to Apigee after applying changes (only if newer)")
 	)
 
 	flag.StringVar(proxyName, "p", "", "alias for -proxy")
@@ -127,6 +126,7 @@ func run() error {
 		})
 	}
 
+	deploy := strings.TrimSpace(*proxyName) != ""
 	return cmd.RunGenerate(cfg, cmd.GenerateArgs{
 		InputPath:   strings.TrimSpace(*inputPath),
 		OutputPath:  strings.TrimSpace(*outputPath),
@@ -135,6 +135,6 @@ func run() error {
 		ProxyName:   strings.TrimSpace(*proxyName),
 		Revision:    *revision,
 		DownloadDir: strings.TrimSpace(*downloadDir),
-		Deploy:      *deployMode,
+		Deploy:      deploy,
 	})
 }

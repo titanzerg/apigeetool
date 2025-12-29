@@ -1146,6 +1146,9 @@ func flowSignatures(flows []proxyxml.Flow) []string {
 	signatures := make([]string, 0, len(flows))
 	for _, fl := range flows {
 		name := strings.TrimSpace(fl.Name)
+		if strings.EqualFold(name, "NotFound") {
+			continue
+		}
 		condition := normalizeFlowField(fl.Condition)
 		description := normalizeFlowField(fl.Description)
 		signatures = append(signatures, fmt.Sprintf("%s|%s|%s", name, condition, description))

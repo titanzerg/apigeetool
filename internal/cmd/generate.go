@@ -28,6 +28,13 @@ func RunGenerate(cfg ApigeeConfig, args GenerateArgs) error {
 		return nil
 	}
 
+	if err := runGenerateWithProxy(cfg, args, proxy, output); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runGenerateWithProxy(cfg ApigeeConfig, args GenerateArgs, proxy, output string) error {
 	if err := RequireApigeeAuth(cfg, "downloading proxies"); err != nil {
 		return err
 	}
@@ -52,10 +59,8 @@ func RunGenerate(cfg ApigeeConfig, args GenerateArgs) error {
 		return nil
 	}
 	if !report.PrintFlowDiff(diff) {
-		if args.Deploy {
-			if err := deployExistingRevision(cfg, proxy, args.Revision); err != nil {
-				log.Printf("warning: deploy latest proxy failed: %v", err)
-			}
+		if err := maybeDeployExistingRevision(cfg, args, proxy); err != nil {
+			log.Printf("warning: deploy latest proxy failed: %v", err)
 		}
 		return nil
 	}
@@ -162,8 +167,69 @@ func applyProxyEndpointUpdate(cfg ApigeeConfig, args GenerateArgs, proxy, output
 	}
 	fmt.Printf("Updated %s with generated ProxyEndpoint content.\n", matchPath)
 	if args.Deploy {
-		if err := deployUpdatedProxy(cfg, proxy, args.Revision, matchPath); err != nil {
+		if err := confirmAndDeployUpdated(cfg, args, proxy, matchPath); err != nil {
 			log.Printf("warning: deploy updated proxy failed: %v", err)
+		}
+	}
+}
+
+func maybeDeployExistingRevision(cfg ApigeeConfig, args GenerateArgs, proxy string) error {
+	if !args.Deploy {
+		return nil
+	}
+	ok, err := confirmDeploy("No differences detected. Deploy existing proxy revision? [y/N]: ")
+	if err != nil {
+		log.Printf("warning: confirm deploy failed: %v", err)
+		return nil
+	}
+	if !ok {
+		fmt.Println("Skipped deploying existing proxy revision.")
+		return nil
+	}
+	if err := deployExistingRevision(cfg, proxy, args.Revision); err != nil {
+		return err
+	}
+	return nil
+}
+
+func confirmAndDeployUpdated(cfg ApigeeConfig, args GenerateArgs, proxy, matchPath string) error {
+	ok, err := confirmDeploy("Deploy updated proxy revision? [y/N]: ")
+	if err != nil {
+		log.Printf("warning: confirm deploy failed: %v", err)
+		return nil
+	}
+	if !ok {
+		fmt.Println("Skipped deploying updated proxy revision.")
+		return nil
+	}
+	if err := deployUpdatedProxy(cfg, proxy, args.Revision, matchPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func confirmDeploy(prompt string) (bool, error) {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		if _, err := fmt.Fprint(os.Stdout, prompt); err != nil {
+			return false, err
+		}
+		resp, err := reader.ReadString('\n')
+		if err != nil {
+			return false, err
+		}
+		resp = strings.TrimSpace(strings.ToLower(resp))
+		if resp == "" {
+			return false, nil
+		}
+		if resp == "y" || resp == "yes" {
+			return true, nil
+		}
+		if resp == "n" || resp == "no" {
+			return false, nil
+		}
+		if _, err := fmt.Fprintln(os.Stdout, "Please answer y or n."); err != nil {
+			return false, err
 		}
 	}
 }

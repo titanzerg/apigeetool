@@ -199,7 +199,7 @@ go run . -compare -proxy my-proxy 12 11
 
 1. ดาวน์โหลด bundle ของ revision 12 และ 11 ลงโฟลเดอร์ `downloaded-proxy-endpoints/compare-rev-12` และ `downloaded-proxy-endpoints/compare-rev-11`
 2. เปรียบเทียบไฟล์ ProxyEndpoint (รวม BasePath และ Flow diff), TargetEndpoint และ Resources
-3. สรุปความต่างด้วยข้อความ เช่น “only in …” หรือ “differs” หากมีเครื่องมือ `diff` จะพิมพ์ unified diff ให้ด้วย
+3. สรุปความต่างด้วยข้อความ เช่น “only in …” หรือ “differs” หากมีเครื่องมือ `diff` จะพิมพ์ unified diff ให้ด้วย (รวมไฟล์ Resources)
 
 หมายเหตุ:
 - ต้องมีสิทธิ์อ่าน proxy bundle และมี token ใช้งานได้
@@ -212,6 +212,7 @@ go run . -compare -proxy my-proxy 12 11
 - หากเจอ error 403/404 ตอนดาวน์โหลด ให้เช็กว่า proxy name, org, และสิทธิ์ของ token ถูกต้อง รวมถึงตรวจสอบว่า proxy นั้นมี revision แล้วจริงๆ
 - หากไม่ได้ไฟล์ ProxyEndpoint เลย ให้ตรวจว่า proxy มีไฟล์อยู่ใน folder `apiproxy/proxy-endpoints` หรือ `apiproxy/proxies` (เครื่องมือรองรับทั้งสองโครงสร้าง)
 - โหมด `-findproxy` จะดาวน์โหลด bundle ของแต่ละ proxy มาตรวจ BasePath ภายในไฟล์ endpoint เพราะฉะนั้นต้องเตรียม token ที่มีสิทธิอ่าน proxy bundle
+- ระหว่าง generate CLI จะตรวจ naming ของ `paths` ใน OpenAPI และพิมพ์ warning พร้อมตัวอย่างแก้ (ไม่ block การสร้างไฟล์)
 - หาก CLI แจ้งว่า “no paths defined” ให้ตรวจสอบว่าไฟล์ YAML มีส่วน `paths:` และจัด indent ถูกต้อง
 - ถ้าต้องการรักษา order ของ path/method ให้แก้ไฟล์ `openapi.yaml` ด้วยเครื่องมือที่ไม่สลับลำดับ key (เช่น VS Code + YAML extension)
 - คำอธิบายของแต่ละ flow จะใช้ `summary` ถ้ามี, ถ้าไม่มีจะถอยไปใช้ `description` หรือสร้างจาก `<METHOD> <Path>` ให้อัตโนมัติ
