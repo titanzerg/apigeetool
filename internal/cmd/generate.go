@@ -79,6 +79,14 @@ func generateProxyEndpoint(args GenerateArgs) (string, int, error) {
 		return "", 0, fmt.Errorf("no paths defined in OpenAPI document")
 	}
 
+	for _, warning := range openapi.ValidatePaths(spec.Paths) {
+		if warning.Suggestion != "" {
+			log.Printf("warning: path %s: %s (e.g. %s)", warning.Path, warning.Message, warning.Suggestion)
+		} else {
+			log.Printf("warning: path %s: %s", warning.Path, warning.Message)
+		}
+	}
+
 	ordering := openapi.ExtractPathOrdering(data)
 	flows := openapi.BuildFlows(spec.Paths, ordering)
 	if len(flows) == 0 {
