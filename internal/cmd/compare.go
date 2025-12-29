@@ -361,11 +361,11 @@ func compareResourceArtifacts(left, right map[string]string, leftSide, rightSide
 	onlyLeft, onlyRight, common := compareFileSets(left, right)
 	diffFound := false
 	for _, rel := range onlyLeft {
-		fmt.Printf("Resource only in %s: %s\n", leftSide, rel)
+		fmt.Printf(onlyInSideFmt, "Resource", leftSide, rel)
 		diffFound = true
 	}
 	for _, rel := range onlyRight {
-		fmt.Printf("Resource only in %s: %s\n", rightSide, rel)
+		fmt.Printf(onlyInSideFmt, "Resource", rightSide, rel)
 		diffFound = true
 	}
 	for _, rel := range common {
@@ -380,7 +380,7 @@ func compareResourceArtifacts(left, right map[string]string, leftSide, rightSide
 			return false, fmt.Errorf(errReadFileFmt, rightPath, err)
 		}
 		if !bytes.Equal(leftData, rightData) {
-			fmt.Printf("Resource differs: %s\n", rel)
+			printUnifiedDiff("Resource", rel, leftPath, rightPath)
 			diffFound = true
 		}
 	}
