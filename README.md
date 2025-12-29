@@ -61,6 +61,7 @@ go run . \
 | `-apigee-host` | base URL ของ Apigee Management API (default `https://apigee.googleapis.com`) |
 | `-download-dir` | โฟลเดอร์ปลายทางที่ต้องการเซฟไฟล์ XML (default `downloaded-proxy-endpoints` และจะลบไฟล์เดิมทุกครั้งก่อนดาวน์โหลดใหม่) |
 | `-findproxy` / `-f` | ใส่ BasePath เพื่อค้นหา proxy ที่ใช้งาน BasePath นั้น (ค้นหาแบบ contains, ไม่สร้างไฟล์ใหม่) |
+| `-compare` / `-c` | เปรียบเทียบ proxy สอง revision (ต้องระบุ `-proxy` และตัวเลข revision 2 ค่า) |
 | `-db-url` | ใส่ PostgreSQL connection URL เพื่อใช้ทั้ง `-sync` และ `-findproxy` (default อ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL`) |
 | `-db-ssl-rootcert` / `-db-ssl-cert` / `-db-ssl-key` | ตั้งค่าไฟล์ TLS สำหรับเชื่อมต่อ DB (ใช้ร่วมทั้ง `-sync` และ `-findproxy`) default อ่านจากตัวแปร `APIGEE_SYNC_DB_SSL_*` |
 | `-endpoints-table` | ชื่อตาราง proxy endpoints ใน Postgres ใช้ร่วมทั้ง `-sync` และ `-findproxy` (default `apigee.apigee_proxy_endpoints`) |
@@ -181,6 +182,28 @@ go run . -findproxy /marine-dashboard -db-url "$APIGEE_SYNC_DB_URL"
 CLI จะดึงผลจากตาราง `apigee.apigee_proxy_endpoints` (หรือชื่อตารางที่ระบุ) โดยตรง ทำให้ได้ผลลัพธ์เร็วขึ้นและไม่ต้องใช้ token Apigee
 
 หลังดาวน์โหลดเสร็จ CLI จะคำนวณ similarity ระหว่างไฟล์ที่ generate (`proxy-endpoint.xml`) กับไฟล์ในโฟลเดอร์ดาวน์โหลด แล้วพิมพ์ชื่อไฟล์ที่ใกล้เคียงที่สุดพร้อมเปอร์เซ็นต์ พร้อมสรุปส่วนต่างของ flow (flow ที่เพิ่ม/หาย และ condition/description ที่ไม่ตรงกัน) เพื่อใช้ตรวจโครงสร้างได้เร็วขึ้น จากนั้นจะถามว่ายืนยันให้อัปเดตไฟล์ดาวน์โหลดให้ตรงกับไฟล์ที่ generate หรือไม่ (ตอบ `y` เพื่อเขียนทับ, กด Enter/`n` เพื่อข้าม)
+
+### โหมดเปรียบเทียบสอง revision ของ proxy (`-compare`)
+
+ใช้สำหรับเปรียบเทียบไฟล์ ProxyEndpoint/TargetEndpoint/Resources ระหว่างสอง revision ของ proxy เดียวกัน โดยต้องระบุชื่อ proxy และตัวเลข revision 2 ค่า
+
+ตัวอย่าง (alias `-c` ใช้งานได้เหมือนกัน):
+
+```bash
+export APIGEE_ORG=my-org
+export APIGEE_TOKEN="$(gcloud auth print-access-token)"
+go run . -compare -proxy my-proxy 12 11
+```
+
+สิ่งที่คำสั่งทำ:
+
+1. ดาวน์โหลด bundle ของ revision 12 และ 11 ลงโฟลเดอร์ `downloaded-proxy-endpoints/compare-rev-12` และ `downloaded-proxy-endpoints/compare-rev-11`
+2. เปรียบเทียบไฟล์ ProxyEndpoint (รวม BasePath และ Flow diff), TargetEndpoint และ Resources
+3. สรุปความต่างด้วยข้อความ เช่น “only in …” หรือ “differs” หากมีเครื่องมือ `diff` จะพิมพ์ unified diff ให้ด้วย
+
+หมายเหตุ:
+- ต้องมีสิทธิ์อ่าน proxy bundle และมี token ใช้งานได้
+- ถ้าไม่พบความต่าง ระบบจะแสดง “No differences detected.”
 
 ## เคล็ดลับ & การดีบัก
 

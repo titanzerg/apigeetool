@@ -31,24 +31,3 @@ func PrintFlowDiff(diff proxyxml.FlowDiff) bool {
 
 	return true
 }
-
-func printFlowList(header string, flows []proxyxml.Flow) {
-	fmt.Println(header)
-	for _, fl := range flows {
-		fmt.Printf("- %s (%s)\n", fl.Name, fl.Condition)
-	}
-}
-
-func printFlowChanges(changes []proxyxml.ChangedFlow) {
-	fmt.Println("Flows with different Condition/Description:")
-	for _, change := range changes {
-		if change.ConditionDiff {
-			fmt.Printf("- %s condition differs:\n  generated: %s\n  existing : %s\n",
-				change.Name, change.GeneratedCondition, change.ExistingCondition)
-		}
-		if change.DescriptionDiff {
-			fmt.Printf("- %s description differs:\n  generated: %s\n  existing : %s\n",
-				change.Name, change.GeneratedDesc, change.ExistingDesc)
-		}
-	}
-}
