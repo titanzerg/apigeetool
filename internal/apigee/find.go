@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"apigee/internal/proxyxml"
 	"apigee/internal/util"
 )
 
@@ -69,13 +70,14 @@ type TargetServerProgress struct {
 
 // ProxyEndpointRecord describes a ProxyEndpoint retrieved from Apigee.
 type ProxyEndpointRecord struct {
-	Proxy    string
-	Endpoint string
-	Revision int
-	BasePath string
-	Targets  []string
-	Envs     []string
-	Flows    int
+	Proxy     string
+	Endpoint  string
+	Revision  int
+	BasePath  string
+	Targets   []string
+	Envs      []string
+	Flows     int
+	FlowSteps proxyxml.FlowSteps
 }
 
 // TargetServerRecord describes a target server with environment context.
@@ -327,13 +329,14 @@ func resolveProxyEnvironments(client ManagementClient, proxy string, rev int) ([
 func appendProxyEndpoints(records []ProxyEndpointRecord, proxy string, rev int, envs []string, endpoints []bundleEndpoint) []ProxyEndpointRecord {
 	for _, endpoint := range endpoints {
 		records = append(records, ProxyEndpointRecord{
-			Proxy:    proxy,
-			Endpoint: endpoint.Name,
-			Revision: rev,
-			BasePath: endpoint.BasePath,
-			Targets:  endpoint.TargetServers,
-			Envs:     envs,
-			Flows:    endpoint.FlowCount,
+			Proxy:     proxy,
+			Endpoint:  endpoint.Name,
+			Revision:  rev,
+			BasePath:  endpoint.BasePath,
+			Targets:   endpoint.TargetServers,
+			Envs:      envs,
+			Flows:     endpoint.FlowCount,
+			FlowSteps: endpoint.FlowSteps,
 		})
 	}
 	return records

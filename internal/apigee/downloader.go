@@ -884,12 +884,14 @@ type bundleEndpoint struct {
 	BasePath      string
 	TargetServers []string
 	FlowCount     int
+	FlowSteps     proxyxml.FlowSteps
 }
 
 type proxyMeta struct {
 	basePath     string
 	targetRoutes []string
 	flowCount    int
+	flowSteps    proxyxml.FlowSteps
 }
 
 func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
@@ -964,6 +966,10 @@ func applyProxyEndpointData(name string, data []byte, proxyData map[string]proxy
 	if err != nil {
 		return true, fmt.Errorf("parse flows for %s: %w", name, err)
 	}
+	flowSteps, err := proxyxml.ParseFlowSteps(data)
+	if err != nil {
+		return true, fmt.Errorf("parse flow steps for %s: %w", name, err)
+	}
 	basePath, err := proxyxml.ExtractBasePath(data)
 	if err != nil {
 		return true, fmt.Errorf("parse base path for %s: %w", name, err)
@@ -976,6 +982,7 @@ func applyProxyEndpointData(name string, data []byte, proxyData map[string]proxy
 		basePath:     basePath,
 		targetRoutes: targets,
 		flowCount:    len(flows),
+		flowSteps:    flowSteps,
 	}
 	return true, nil
 }
@@ -1052,6 +1059,7 @@ func buildBundleEndpoints(targetServers map[string][]string, proxyData map[strin
 			BasePath:      meta.basePath,
 			TargetServers: util.MergeAndUnique(nil, servers),
 			FlowCount:     meta.flowCount,
+			FlowSteps:     meta.flowSteps,
 		})
 	}
 	return endpoints, nil

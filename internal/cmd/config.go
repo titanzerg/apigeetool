@@ -20,6 +20,7 @@ type SyncArgs struct {
 	ProductsTable       string
 	AppsTable           string
 	AppCredentialsTable string
+	ProxyFlowsTable     string
 	SSLRoot             string
 	SSLCert             string
 	SSLKey              string

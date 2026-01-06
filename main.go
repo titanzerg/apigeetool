@@ -62,13 +62,14 @@ func run() error {
 
 		findBase = flag.String("findproxy", "", "Find Apigee proxies that use the specified BasePath")
 
-		syncFlag       syncFlagValue
-		endpointsTable = flag.String("endpoints-table", "apigee.apigee_proxy_endpoints", "PostgreSQL table for proxy endpoints (used by -sync and -findproxy cache lookups)")
-		targetsTable   = flag.String("targets-table", "apigee.apigee_target_servers", "PostgreSQL table for target servers (sync mode)")
-		productsTable  = flag.String("products-table", "apigee.apigee_api_products", "PostgreSQL table for API products (sync mode)")
-		appsTable      = flag.String("apps-table", "apigee.apigee_apps", "PostgreSQL table for apps (sync mode)")
-		appCredsTable  = flag.String("app-credentials-table", "apigee.apigee_app_credentials", "PostgreSQL table for app credentials (sync mode)")
-		compareMode    = flag.Bool("compare", false, "Compare two Apigee proxy revisions (requires -proxy and two revision numbers)")
+		syncFlag        syncFlagValue
+		endpointsTable  = flag.String("endpoints-table", "apigee.apigee_proxy_endpoints", "PostgreSQL table for proxy endpoints (used by -sync and -findproxy cache lookups)")
+		targetsTable    = flag.String("targets-table", "apigee.apigee_target_servers", "PostgreSQL table for target servers (sync mode)")
+		productsTable   = flag.String("products-table", "apigee.apigee_api_products", "PostgreSQL table for API products (sync mode)")
+		appsTable       = flag.String("apps-table", "apigee.apigee_apps", "PostgreSQL table for apps (sync mode)")
+		appCredsTable   = flag.String("app-credentials-table", "apigee.apigee_app_credentials", "PostgreSQL table for app credentials (sync mode)")
+		proxyFlowsTable = flag.String("proxy-flows-table", "apigee.apigee_proxy_endpoint_flows", "PostgreSQL table for proxy endpoint flow steps (sync mode)")
+		compareMode     = flag.Bool("compare", false, "Compare two Apigee proxy revisions (requires -proxy and two revision numbers)")
 	)
 
 	flag.StringVar(proxyName, "p", "", "alias for -proxy")
@@ -103,6 +104,7 @@ func run() error {
 			ProductsTable:       strings.TrimSpace(*productsTable),
 			AppsTable:           strings.TrimSpace(*appsTable),
 			AppCredentialsTable: strings.TrimSpace(*appCredsTable),
+			ProxyFlowsTable:     strings.TrimSpace(*proxyFlowsTable),
 			SSLRoot:             strings.TrimSpace(*dbSSLRoot),
 			SSLCert:             strings.TrimSpace(*dbSSLCert),
 			SSLKey:              strings.TrimSpace(*dbSSLKey),

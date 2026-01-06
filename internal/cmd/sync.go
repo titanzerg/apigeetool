@@ -90,7 +90,7 @@ func RunSync(cfg ApigeeConfig, args SyncArgs) error {
 		return err
 	}
 
-	table, targetTable, productsTable, appsTable, appCredentialsTable := syncTableNames(args)
+	table, targetTable, productsTable, appsTable, appCredentialsTable, proxyFlowsTable := syncTableNames(args)
 	progress := syncProxyScanProgressPrinter()
 
 	dbOpts := syncDBOptions(args, dbURL)
@@ -106,7 +106,7 @@ func RunSync(cfg ApigeeConfig, args SyncArgs) error {
 	if err != nil {
 		return err
 	}
-	if err := syncProxyEndpointsIfRequested(ctx, pool, selection, table, endpoints); err != nil {
+	if err := syncProxyEndpointsIfRequested(ctx, pool, selection, table, proxyFlowsTable, endpoints); err != nil {
 		return err
 	}
 	if err := syncTargetServersIfRequested(ctx, pool, selection, targetTable, cfg, endpoints); err != nil {

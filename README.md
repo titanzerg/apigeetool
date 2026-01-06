@@ -69,6 +69,7 @@ go run . \
 | `-products-table` | ชื่อตาราง API products ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_api_products`) |
 | `-apps-table` | ชื่อตาราง apps ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_apps`) |
 | `-app-credentials-table` | ชื่อตาราง app credentials ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_app_credentials`) |
+| `-proxy-flows-table` | ชื่อตาราง pre/post flow steps ของ proxy endpoint ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_proxy_endpoint_flows`) |
 | `-sync` | เปิดโหมดซิงก์ลง PostgreSQL (ไม่สร้างไฟล์ XML) เลือกได้ `all` (default เมื่อใส่ flag), `apiproxy`, `target_server`, `api_product`, `apps` หรือคอมมาแยกหลายค่า |
 
 ### โหมดซิงก์ข้อมูล proxy endpoints → PostgreSQL
@@ -90,6 +91,7 @@ go run . -sync -org my-org -token "$APIGEE_TOKEN" -db-url postgres://...
 5. ดึงข้อมูล target server ที่อ้างอิงในแต่ละ environment แล้วบันทึกลง table เป้าหมายสำหรับ target server แยกต่างหาก
 6. ดึงข้อมูล API product ทั้งหมดแล้วบันทึกลงตาราง API products
 7. ดึงข้อมูล apps พร้อม credentials แล้วบันทึกลงตาราง apps + app credentials
+8. ดึงข้อมูล pre/post flow steps ของ ProxyEndpoint แล้วบันทึกลงตาราง proxy endpoint flows
 
 > ระบบจะบังคับ `sslmode=require` อัตโนมัติ และจะเติมค่า `sslrootcert`, `sslcert`, `sslkey` จาก flag/ตัวแปรสภาพแวดล้อมที่ตั้งไว้ เพื่อให้เชื่อมต่อผ่าน TLS โดยใช้ไฟล์ `.pem` ที่คุณเตรียมไว้
 
@@ -117,6 +119,17 @@ CREATE TABLE apigee.apigee_proxy_endpoints (
   target_servers text[] NOT NULL DEFAULT '{}',
   environments text[] NOT NULL DEFAULT '{}',
   flow_count integer NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (proxy_name, endpoint_name)
+);
+
+CREATE TABLE apigee.apigee_proxy_endpoint_flows (
+  proxy_name text NOT NULL,
+  endpoint_name text NOT NULL,
+  preflow_request_steps text[] NOT NULL DEFAULT '{}',
+  preflow_response_steps text[] NOT NULL DEFAULT '{}',
+  postflow_request_steps text[] NOT NULL DEFAULT '{}',
+  postflow_response_steps text[] NOT NULL DEFAULT '{}',
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (proxy_name, endpoint_name)
 );

@@ -35,7 +35,7 @@ func resolveSyncDBURL(args SyncArgs) (string, error) {
 	return dbURL, nil
 }
 
-func syncTableNames(args SyncArgs) (string, string, string, string, string) {
+func syncTableNames(args SyncArgs) (string, string, string, string, string, string) {
 	table := DefaultString(args.EndpointsTable, "apigee.apigee_proxy_endpoints")
 	targetTable := DefaultString(args.TargetTable, strings.TrimSpace(os.Getenv("APIGEE_SYNC_TARGET_TABLE")))
 	targetTable = DefaultString(targetTable, "apigee.apigee_target_servers")
@@ -44,7 +44,9 @@ func syncTableNames(args SyncArgs) (string, string, string, string, string) {
 	appsTable = DefaultString(appsTable, "apigee.apigee_apps")
 	appCredsTable := DefaultString(args.AppCredentialsTable, strings.TrimSpace(os.Getenv("APIGEE_SYNC_APP_CREDENTIALS_TABLE")))
 	appCredsTable = DefaultString(appCredsTable, "apigee.apigee_app_credentials")
-	return table, targetTable, productsTable, appsTable, appCredsTable
+	proxyFlowsTable := DefaultString(args.ProxyFlowsTable, strings.TrimSpace(os.Getenv("APIGEE_SYNC_PROXY_FLOW_TABLE")))
+	proxyFlowsTable = DefaultString(proxyFlowsTable, "apigee.apigee_proxy_endpoint_flows")
+	return table, targetTable, productsTable, appsTable, appCredsTable, proxyFlowsTable
 }
 
 func syncDBOptions(args SyncArgs, dbURL string) dbConnOptions {
@@ -85,7 +87,7 @@ func collectProxyEndpointsIfNeeded(cfg ApigeeConfig, selection SyncSelection, pr
 	return endpoints, nil
 }
 
-func syncProxyEndpointsIfRequested(ctx context.Context, pool *pgxpool.Pool, selection SyncSelection, table string, endpoints []apigee.ProxyEndpointRecord) error {
+func syncProxyEndpointsIfRequested(ctx context.Context, pool *pgxpool.Pool, selection SyncSelection, table, proxyFlowsTable string, endpoints []apigee.ProxyEndpointRecord) error {
 	if !selection.needsProxyEndpoints() {
 		return nil
 	}
@@ -94,6 +96,10 @@ func syncProxyEndpointsIfRequested(ctx context.Context, pool *pgxpool.Pool, sele
 			return fmt.Errorf("sync proxy endpoints to PostgreSQL: %w", err)
 		}
 		fmt.Printf("Updated %d proxy endpoint(s) in %s\n", len(endpoints), table)
+		if err := syncProxyFlowSteps(ctx, pool, proxyFlowsTable, endpoints); err != nil {
+			return fmt.Errorf("sync proxy endpoint flow steps to PostgreSQL: %w", err)
+		}
+		fmt.Printf("Updated %d proxy endpoint flow record(s) in %s\n", len(endpoints), proxyFlowsTable)
 	} else {
 		fmt.Println("Skipped proxy endpoint sync (not requested)")
 	}
@@ -183,6 +189,30 @@ func syncProxyEndpoints(ctx context.Context, pool *pgxpool.Pool, table string, e
 			envs := normalizeStringSlice(ep.Envs)
 			if _, err := tx.Exec(ctx, insertSQL, ep.Proxy, ep.Endpoint, ep.Revision, ep.BasePath, servers, envs, ep.Flows, snapshot); err != nil {
 				return fmt.Errorf("insert %s.%s: %w", ep.Proxy, ep.Endpoint, err)
+			}
+		}
+		return nil
+	})
+}
+
+func syncProxyFlowSteps(ctx context.Context, pool *pgxpool.Pool, table string, endpoints []apigee.ProxyEndpointRecord) error {
+	return withTx(ctx, pool, table, func(ctx context.Context, tx pgx.Tx, quotedTable string) error {
+		if _, err := tx.Exec(ctx, deleteFromPrefix+quotedTable); err != nil {
+			return fmt.Errorf(clearTableFmt, quotedTable, err)
+		}
+
+		insertSQL := fmt.Sprintf(
+			"INSERT INTO %s (proxy_name, endpoint_name, preflow_request_steps, preflow_response_steps, postflow_request_steps, postflow_response_steps, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+			quotedTable,
+		)
+		now := time.Now().UTC()
+		for _, ep := range endpoints {
+			preReq := normalizeStringSlice(ep.FlowSteps.PreFlowRequest)
+			preResp := normalizeStringSlice(ep.FlowSteps.PreFlowResponse)
+			postReq := normalizeStringSlice(ep.FlowSteps.PostFlowRequest)
+			postResp := normalizeStringSlice(ep.FlowSteps.PostFlowResponse)
+			if _, err := tx.Exec(ctx, insertSQL, ep.Proxy, ep.Endpoint, preReq, preResp, postReq, postResp, now); err != nil {
+				return fmt.Errorf("insert proxy flow steps %s/%s: %w", ep.Proxy, ep.Endpoint, err)
 			}
 		}
 		return nil
