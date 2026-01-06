@@ -67,7 +67,9 @@ go run . \
 | `-endpoints-table` | ชื่อตาราง proxy endpoints ใน Postgres ใช้ร่วมทั้ง `-sync` และ `-findproxy` (default `apigee.apigee_proxy_endpoints`) |
 | `-targets-table` | ชื่อตาราง target servers ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_target_servers`) |
 | `-products-table` | ชื่อตาราง API products ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_api_products`) |
-| `-sync` | เปิดโหมดซิงก์ลง PostgreSQL (ไม่สร้างไฟล์ XML) เลือกได้ `all` (default เมื่อใส่ flag), `apiproxy`, `target_server`, `api_product` หรือคอมมาแยกหลายค่า |
+| `-apps-table` | ชื่อตาราง apps ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_apps`) |
+| `-app-credentials-table` | ชื่อตาราง app credentials ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_app_credentials`) |
+| `-sync` | เปิดโหมดซิงก์ลง PostgreSQL (ไม่สร้างไฟล์ XML) เลือกได้ `all` (default เมื่อใส่ flag), `apiproxy`, `target_server`, `api_product`, `apps` หรือคอมมาแยกหลายค่า |
 
 ### โหมดซิงก์ข้อมูล proxy endpoints → PostgreSQL
 
@@ -77,7 +79,7 @@ go run . \
 go run . -sync -org my-org -token "$APIGEE_TOKEN" -db-url postgres://...
 ```
 
-ไม่ระบุค่าถัดจาก `-sync` จะซิงก์ทั้ง proxy endpoints, target server และ API product (เทียบเท่า `-sync=all`). ถ้าต้องการเฉพาะบางอย่างให้ระบุชื่อตามนี้ เช่น `-sync=apiproxy`, `-sync=target_server`, หรือรวมหลายรายการแบบ `-sync=apiproxy,api_product`
+ไม่ระบุค่าถัดจาก `-sync` จะซิงก์ทั้ง proxy endpoints, target server, API product และ apps (เทียบเท่า `-sync=all`). ถ้าต้องการเฉพาะบางอย่างให้ระบุชื่อตามนี้ เช่น `-sync=apiproxy`, `-sync=target_server`, `-sync=apps` หรือรวมหลายรายการแบบ `-sync=apiproxy,api_product`
 
 เมื่อซิงก์ทั้งหมด (`-sync` หรือ `-sync=all`) คำสั่งจะ
 
@@ -87,6 +89,7 @@ go run . -sync -org my-org -token "$APIGEE_TOKEN" -db-url postgres://...
 4. ใส่ข้อมูลล่าสุด (proxy, endpoint, revision, base path, target servers, environments, flow count, updated_at) กลับลงไปใหม่ภายในการทำธุรกรรมเดียว
 5. ดึงข้อมูล target server ที่อ้างอิงในแต่ละ environment แล้วบันทึกลง table เป้าหมายสำหรับ target server แยกต่างหาก
 6. ดึงข้อมูล API product ทั้งหมดแล้วบันทึกลงตาราง API products
+7. ดึงข้อมูล apps พร้อม credentials แล้วบันทึกลงตาราง apps + app credentials
 
 > ระบบจะบังคับ `sslmode=require` อัตโนมัติ และจะเติมค่า `sslrootcert`, `sslcert`, `sslkey` จาก flag/ตัวแปรสภาพแวดล้อมที่ตั้งไว้ เพื่อให้เชื่อมต่อผ่าน TLS โดยใช้ไฟล์ `.pem` ที่คุณเตรียมไว้
 
@@ -136,6 +139,26 @@ CREATE TABLE apigee.apigee_api_products (
   apps text[] NOT NULL DEFAULT '{}',
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (name)
+);
+
+CREATE TABLE apigee.apigee_apps (
+  app_id text NOT NULL,
+  name text NOT NULL,
+  owner text NULL,
+  registered_at timestamptz NULL,
+  notes text NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (app_id)
+);
+
+CREATE TABLE apigee.apigee_app_credentials (
+  app_id text NOT NULL,
+  consumer_key text NOT NULL,
+  consumer_secret text NOT NULL,
+  expires_at timestamptz NULL,
+  products text[] NOT NULL DEFAULT '{}',
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (app_id, consumer_key)
 );
 ```
 

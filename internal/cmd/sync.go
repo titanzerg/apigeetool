@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	syncTargetRequiredErr = "sync requires at least one target: apiproxy, target_server, api_product, or all"
+	syncTargetRequiredErr = "sync requires at least one target: apiproxy, target_server, api_product, apps, or all"
 	noneLabel             = "<none>"
 	deleteFromPrefix      = "DELETE FROM "
 	clearTableFmt         = "clear %s: %w"
@@ -18,11 +18,12 @@ type SyncSelection struct {
 	ProxyEndpoints bool
 	TargetServers  bool
 	APIProducts    bool
+	Apps           bool
 }
 
 // Any reports whether at least one sync target is enabled.
 func (s SyncSelection) Any() bool {
-	return s.ProxyEndpoints || s.TargetServers || s.APIProducts
+	return s.ProxyEndpoints || s.TargetServers || s.APIProducts || s.Apps
 }
 
 // needsProxyEndpoints reports whether proxy endpoints must be fetched to support the requested sync.
@@ -46,15 +47,18 @@ func ParseSyncSelection(raw string) (SyncSelection, error) {
 			selection.ProxyEndpoints = true
 			selection.TargetServers = true
 			selection.APIProducts = true
+			selection.Apps = true
 		case "apiproxy", "apiproxies", "proxy", "proxies":
 			selection.ProxyEndpoints = true
 		case "target_server", "targetserver", "targetservers", "targets", "target":
 			selection.TargetServers = true
 		case "api_product", "apiproduct", "api_products", "apiproducts", "product", "products":
 			selection.APIProducts = true
+		case "app", "apps", "developer_app", "developer_apps":
+			selection.Apps = true
 		default:
 			if token != "" {
-				return SyncSelection{}, fmt.Errorf("unknown sync target %q (valid values: all, apiproxy, target_server, api_product)", part)
+				return SyncSelection{}, fmt.Errorf("unknown sync target %q (valid values: all, apiproxy, target_server, api_product, apps)", part)
 			}
 		}
 	}
@@ -86,7 +90,7 @@ func RunSync(cfg ApigeeConfig, args SyncArgs) error {
 		return err
 	}
 
-	table, targetTable, productsTable := syncTableNames(args)
+	table, targetTable, productsTable, appsTable, appCredentialsTable := syncTableNames(args)
 	progress := syncProxyScanProgressPrinter()
 
 	dbOpts := syncDBOptions(args, dbURL)
@@ -109,6 +113,9 @@ func RunSync(cfg ApigeeConfig, args SyncArgs) error {
 		return err
 	}
 	if err := syncAPIProductsIfRequested(ctx, pool, selection, productsTable, cfg); err != nil {
+		return err
+	}
+	if err := syncAppsIfRequested(ctx, pool, selection, appsTable, appCredentialsTable, cfg); err != nil {
 		return err
 	}
 

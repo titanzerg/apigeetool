@@ -62,3 +62,25 @@ func apiProductProgressPrinter() func(apigee.APIProductProgress) {
 		fmt.Printf("[%d/%d] product %s envs: %s proxies: %s apps: %d\n", p.Index, p.Total, p.Name, envs, proxies, p.Apps)
 	}
 }
+
+func appProgressPrinter() func(apigee.AppProgress) {
+	return func(p apigee.AppProgress) {
+		label := fmt.Sprintf("[%d/?]", p.Index)
+		if p.Total > 0 {
+			label = fmt.Sprintf("[%d/%d]", p.Index, p.Total)
+		}
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			name = "<unnamed>"
+		}
+		appID := strings.TrimSpace(p.AppID)
+		if appID == "" {
+			appID = "<unknown>"
+		}
+		if p.Err != nil {
+			fmt.Printf("%s app %s id: %s error: %v\n", label, name, appID, p.Err)
+			return
+		}
+		fmt.Printf("%s app %s id: %s credentials: %d\n", label, name, appID, p.Credentials)
+	}
+}

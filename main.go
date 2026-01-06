@@ -66,13 +66,15 @@ func run() error {
 		endpointsTable = flag.String("endpoints-table", "apigee.apigee_proxy_endpoints", "PostgreSQL table for proxy endpoints (used by -sync and -findproxy cache lookups)")
 		targetsTable   = flag.String("targets-table", "apigee.apigee_target_servers", "PostgreSQL table for target servers (sync mode)")
 		productsTable  = flag.String("products-table", "apigee.apigee_api_products", "PostgreSQL table for API products (sync mode)")
+		appsTable      = flag.String("apps-table", "apigee.apigee_apps", "PostgreSQL table for apps (sync mode)")
+		appCredsTable  = flag.String("app-credentials-table", "apigee.apigee_app_credentials", "PostgreSQL table for app credentials (sync mode)")
 		compareMode    = flag.Bool("compare", false, "Compare two Apigee proxy revisions (requires -proxy and two revision numbers)")
 	)
 
 	flag.StringVar(proxyName, "p", "", "alias for -proxy")
 	flag.StringVar(findBase, "f", "", "alias for -findproxy")
 	flag.BoolVar(compareMode, "c", false, "alias for -compare")
-	flag.Var(&syncFlag, "sync", "Sync Apigee data into PostgreSQL (all|apiproxy|target_server|api_product)")
+	flag.Var(&syncFlag, "sync", "Sync Apigee data into PostgreSQL (all|apiproxy|target_server|api_product|apps)")
 	flag.Parse()
 
 	cfg := cmd.ResolveApigeeConfig(*apigeeOrg, *apigeeToken, *apigeeHost)
@@ -94,14 +96,16 @@ func run() error {
 			return err
 		}
 		return cmd.RunSync(cfg, cmd.SyncArgs{
-			Selection:      selection,
-			DBURL:          strings.TrimSpace(*dbURL),
-			EndpointsTable: strings.TrimSpace(*endpointsTable),
-			TargetTable:    strings.TrimSpace(*targetsTable),
-			ProductsTable:  strings.TrimSpace(*productsTable),
-			SSLRoot:        strings.TrimSpace(*dbSSLRoot),
-			SSLCert:        strings.TrimSpace(*dbSSLCert),
-			SSLKey:         strings.TrimSpace(*dbSSLKey),
+			Selection:           selection,
+			DBURL:               strings.TrimSpace(*dbURL),
+			EndpointsTable:      strings.TrimSpace(*endpointsTable),
+			TargetTable:         strings.TrimSpace(*targetsTable),
+			ProductsTable:       strings.TrimSpace(*productsTable),
+			AppsTable:           strings.TrimSpace(*appsTable),
+			AppCredentialsTable: strings.TrimSpace(*appCredsTable),
+			SSLRoot:             strings.TrimSpace(*dbSSLRoot),
+			SSLCert:             strings.TrimSpace(*dbSSLCert),
+			SSLKey:              strings.TrimSpace(*dbSSLKey),
 		})
 	}
 

@@ -16,6 +16,7 @@ func TestParseSyncSelection(t *testing.T) {
 				ProxyEndpoints: true,
 				TargetServers:  true,
 				APIProducts:    true,
+				Apps:           true,
 			},
 		},
 		{
@@ -45,6 +46,13 @@ func TestParseSyncSelection(t *testing.T) {
 			expected: SyncSelection{
 				ProxyEndpoints: true,
 				APIProducts:    true,
+			},
+		},
+		{
+			name:  "apps only",
+			input: "apps",
+			expected: SyncSelection{
+				Apps: true,
 			},
 		},
 		{

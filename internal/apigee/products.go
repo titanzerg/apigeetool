@@ -248,18 +248,31 @@ type orgAppsPage struct {
 }
 
 type orgApp struct {
-	Name        string              `json:"name"`
-	AppName     string              `json:"appName"`
-	AppID       string              `json:"appId"`
-	APIProducts apiProductNames     `json:"apiProducts"`
-	Credentials []orgAppCredentials `json:"credentials"`
+	Name           string              `json:"name"`
+	AppName        string              `json:"appName"`
+	AppID          string              `json:"appId"`
+	AppOwner       string              `json:"appOwner"`
+	DeveloperID    string              `json:"developerId"`
+	DeveloperEmail string              `json:"developerEmail"`
+	CreatedAt      epochMillis         `json:"createdAt"`
+	Attributes     []nameValue         `json:"attributes"`
+	APIProducts    apiProductNames     `json:"apiProducts"`
+	Credentials    []orgAppCredentials `json:"credentials"`
 }
 
 type orgAppCredentials struct {
-	APIProducts apiProductNames `json:"apiProducts"`
+	APIProducts    apiProductNames `json:"apiProducts"`
+	ConsumerKey    string          `json:"consumerKey"`
+	ConsumerSecret string          `json:"consumerSecret"`
+	ExpiresAt      epochMillis     `json:"expiresAt"`
 }
 
 type apiProductNames []string
+
+type nameValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
 
 // UnmarshalJSON accepts either an array of strings or an array of objects with apiproduct/apiProduct/name keys.
 func (p *apiProductNames) UnmarshalJSON(data []byte) error {
