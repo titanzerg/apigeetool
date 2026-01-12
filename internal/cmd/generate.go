@@ -193,13 +193,13 @@ func maybeDeployExistingRevision(cfg ApigeeConfig, args GenerateArgs, proxy stri
 }
 
 func confirmAndDeployUpdated(cfg ApigeeConfig, args GenerateArgs, proxy, matchPath string) error {
-	ok, err := confirmDeploy("Deploy updated proxy revision? [y/N]: ")
+	ok, err := confirmDeploy("Create new revision from updated proxy? [y/N]: ")
 	if err != nil {
-		log.Printf("warning: confirm deploy failed: %v", err)
+		log.Printf("warning: confirm create revision failed: %v", err)
 		return nil
 	}
 	if !ok {
-		fmt.Println("Skipped deploying updated proxy revision.")
+		fmt.Println("Skipped creating new revision.")
 		return nil
 	}
 	if err := deployUpdatedProxy(cfg, proxy, args.Revision, matchPath); err != nil {
@@ -264,6 +264,16 @@ func deployUpdatedProxy(cfg ApigeeConfig, proxy string, revision int, updatedPat
 		return err
 	}
 
+	deployedByEnv, err := client.DeployedRevisions(proxy)
+	if err != nil {
+		return fmt.Errorf("list deployed revisions: %w", err)
+	}
+
+	newRev, err := importUpdatedRevision(client, proxy, baseRev, updatedPath)
+	if err != nil {
+		return err
+	}
+
 	envs, err := client.EnvironmentsForRevision(proxy, baseRev)
 	if err != nil {
 		return fmt.Errorf("list environments for revision %d: %w", baseRev, err)
@@ -273,18 +283,8 @@ func deployUpdatedProxy(cfg ApigeeConfig, proxy string, revision int, updatedPat
 		return nil
 	}
 
-	deployedByEnv, err := client.DeployedRevisions(proxy)
-	if err != nil {
-		return fmt.Errorf("list deployed revisions: %w", err)
-	}
-
-	selected, err := selectDeployEnvs(envs, deployedByEnv, baseRev)
+	selected, err := selectDeployEnvs(envs, deployedByEnv, newRev)
 	if err != nil || len(selected) == 0 {
-		return err
-	}
-
-	newRev, err := importUpdatedRevision(client, proxy, baseRev, updatedPath)
-	if err != nil {
 		return err
 	}
 
