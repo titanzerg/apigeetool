@@ -880,11 +880,12 @@ func extractNameish(obj map[string]interface{}) string {
 }
 
 type bundleEndpoint struct {
-	Name          string
-	BasePath      string
-	TargetServers []string
-	FlowCount     int
-	FlowSteps     proxyxml.FlowSteps
+	Name            string
+	BasePath        string
+	TargetServers   []string
+	TargetEndpoints []proxyxml.TargetEndpointDetails
+	FlowCount       int
+	FlowSteps       proxyxml.FlowSteps
 }
 
 type proxyMeta struct {
@@ -901,11 +902,11 @@ func parseProxyEndpointsFromBundle(bundle []byte) ([]bundleEndpoint, error) {
 		return nil, fmt.Errorf("parse bundle zip: %w", err)
 	}
 
-	targetServers, proxyData, err := collectBundleData(zipReader.File)
+	targetEndpoints, proxyData, err := collectBundleData(zipReader.File)
 	if err != nil {
 		return nil, err
 	}
-	return buildBundleEndpoints(targetServers, proxyData)
+	return buildBundleEndpoints(targetEndpoints, proxyData)
 }
 
 func shouldSkipBundleEntry(name string, isDir bool) bool {
@@ -928,7 +929,7 @@ func readZipEntry(file *zip.File) ([]byte, error) {
 	return data, nil
 }
 
-func applyTargetEndpointData(name string, data []byte, targetServers map[string][]string) (bool, error) {
+func applyTargetEndpointData(name string, data []byte, targetEndpoints map[string]proxyxml.TargetEndpointDetails) (bool, error) {
 	targetPrefix, ok := targetEndpointPrefix(name)
 	if !ok {
 		return false, nil
@@ -937,18 +938,30 @@ func applyTargetEndpointData(name string, data []byte, targetServers map[string]
 	if rel == "" {
 		return true, nil
 	}
-	targetName, servers, err := proxyxml.ParseTargetEndpointServers(data)
+	details, err := proxyxml.ParseTargetEndpointDetails(data)
 	if err != nil {
 		return true, fmt.Errorf("parse target endpoint %s: %w", name, err)
 	}
+	targetName := details.Name
 	if targetName == "" {
 		targetName = strings.TrimSuffix(rel, path.Ext(rel))
 	}
 	if targetName == "" {
 		return true, nil
 	}
+	details.Name = targetName
 	key := strings.ToLower(targetName)
-	targetServers[key] = util.MergeAndUnique(targetServers[key], servers)
+	if existing, ok := targetEndpoints[key]; ok {
+		details.LoadBalancer = util.MergeAndUnique(existing.LoadBalancer, details.LoadBalancer)
+		if len(existing.Properties) > 0 && len(details.Properties) == 0 {
+			details.Properties = existing.Properties
+			details.SuccessCodes = existing.SuccessCodes
+		}
+		if details.URL == "" {
+			details.URL = existing.URL
+		}
+	}
+	targetEndpoints[key] = details
 	return true, nil
 }
 
@@ -1018,18 +1031,18 @@ func firstStringValue(obj map[string]interface{}, keys []string) string {
 	return ""
 }
 
-func collectBundleData(files []*zip.File) (map[string][]string, map[string]proxyMeta, error) {
-	targetServers := make(map[string][]string)
+func collectBundleData(files []*zip.File) (map[string]proxyxml.TargetEndpointDetails, map[string]proxyMeta, error) {
+	targetEndpoints := make(map[string]proxyxml.TargetEndpointDetails)
 	proxyData := make(map[string]proxyMeta)
 	for _, file := range files {
-		if err := processBundleEntry(file, targetServers, proxyData); err != nil {
+		if err := processBundleEntry(file, targetEndpoints, proxyData); err != nil {
 			return nil, nil, err
 		}
 	}
-	return targetServers, proxyData, nil
+	return targetEndpoints, proxyData, nil
 }
 
-func processBundleEntry(file *zip.File, targetServers map[string][]string, proxyData map[string]proxyMeta) error {
+func processBundleEntry(file *zip.File, targetEndpoints map[string]proxyxml.TargetEndpointDetails, proxyData map[string]proxyMeta) error {
 	if shouldSkipBundleEntry(file.Name, file.FileInfo().IsDir()) {
 		return nil
 	}
@@ -1037,7 +1050,7 @@ func processBundleEntry(file *zip.File, targetServers map[string][]string, proxy
 	if err != nil {
 		return err
 	}
-	if handled, err := applyTargetEndpointData(file.Name, data, targetServers); handled || err != nil {
+	if handled, err := applyTargetEndpointData(file.Name, data, targetEndpoints); handled || err != nil {
 		return err
 	}
 	if handled, err := applyProxyEndpointData(file.Name, data, proxyData); handled || err != nil {
@@ -1046,35 +1059,61 @@ func processBundleEntry(file *zip.File, targetServers map[string][]string, proxy
 	return nil
 }
 
-func buildBundleEndpoints(targetServers map[string][]string, proxyData map[string]proxyMeta) ([]bundleEndpoint, error) {
+func buildBundleEndpoints(targetEndpoints map[string]proxyxml.TargetEndpointDetails, proxyData map[string]proxyMeta) ([]bundleEndpoint, error) {
 	if len(proxyData) == 0 {
 		return nil, fmt.Errorf("no ProxyEndpoint files found in Apigee bundle")
 	}
 
 	endpoints := make([]bundleEndpoint, 0, len(proxyData))
 	for name, meta := range proxyData {
-		servers := collectTargetServers(meta.targetRoutes, targetServers)
+		servers := collectTargetServers(meta.targetRoutes, targetEndpoints)
+		endpointTargets := collectTargetEndpoints(meta.targetRoutes, targetEndpoints)
 		endpoints = append(endpoints, bundleEndpoint{
-			Name:          name,
-			BasePath:      meta.basePath,
-			TargetServers: util.MergeAndUnique(nil, servers),
-			FlowCount:     meta.flowCount,
-			FlowSteps:     meta.flowSteps,
+			Name:            name,
+			BasePath:        meta.basePath,
+			TargetServers:   util.MergeAndUnique(nil, servers),
+			TargetEndpoints: endpointTargets,
+			FlowCount:       meta.flowCount,
+			FlowSteps:       meta.flowSteps,
 		})
 	}
 	return endpoints, nil
 }
 
-func collectTargetServers(targetRoutes []string, targetServers map[string][]string) []string {
+func collectTargetServers(targetRoutes []string, targetEndpoints map[string]proxyxml.TargetEndpointDetails) []string {
 	var servers []string
 	for _, tgt := range targetRoutes {
 		key := strings.ToLower(strings.TrimSpace(tgt))
 		if key == "" {
 			continue
 		}
-		servers = append(servers, targetServers[key]...)
+		if details, ok := targetEndpoints[key]; ok {
+			servers = append(servers, details.LoadBalancer...)
+		}
 	}
 	return servers
+}
+
+func collectTargetEndpoints(targetRoutes []string, targetEndpoints map[string]proxyxml.TargetEndpointDetails) []proxyxml.TargetEndpointDetails {
+	seen := make(map[string]struct{})
+	var result []proxyxml.TargetEndpointDetails
+	for _, tgt := range targetRoutes {
+		key := strings.ToLower(strings.TrimSpace(tgt))
+		if key == "" {
+			continue
+		}
+		details, ok := targetEndpoints[key]
+		if !ok || strings.TrimSpace(details.Name) == "" {
+			continue
+		}
+		nameKey := strings.ToLower(strings.TrimSpace(details.Name))
+		if _, exists := seen[nameKey]; exists {
+			continue
+		}
+		seen[nameKey] = struct{}{}
+		result = append(result, details)
+	}
+	return result
 }
 
 // FindClosestProxyEndpoint finds the downloaded ProxyEndpoint XML that is most similar to the generated file.

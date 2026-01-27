@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -35,8 +36,10 @@ func resolveSyncDBURL(args SyncArgs) (string, error) {
 	return dbURL, nil
 }
 
-func syncTableNames(args SyncArgs) (string, string, string, string, string, string) {
+func syncTableNames(args SyncArgs) (string, string, string, string, string, string, string) {
 	table := DefaultString(args.EndpointsTable, "apigee.apigee_proxy_endpoints")
+	targetEndpointsTable := DefaultString(args.TargetEndpointsTable, strings.TrimSpace(os.Getenv("APIGEE_SYNC_TARGET_ENDPOINT_TABLE")))
+	targetEndpointsTable = DefaultString(targetEndpointsTable, "apigee.apigee_target_endpoints")
 	targetTable := DefaultString(args.TargetTable, strings.TrimSpace(os.Getenv("APIGEE_SYNC_TARGET_TABLE")))
 	targetTable = DefaultString(targetTable, "apigee.apigee_target_servers")
 	productsTable := DefaultString(args.ProductsTable, "apigee.apigee_api_products")
@@ -46,7 +49,7 @@ func syncTableNames(args SyncArgs) (string, string, string, string, string, stri
 	appCredsTable = DefaultString(appCredsTable, "apigee.apigee_app_credentials")
 	proxyFlowsTable := DefaultString(args.ProxyFlowsTable, strings.TrimSpace(os.Getenv("APIGEE_SYNC_PROXY_FLOW_TABLE")))
 	proxyFlowsTable = DefaultString(proxyFlowsTable, "apigee.apigee_proxy_endpoint_flows")
-	return table, targetTable, productsTable, appsTable, appCredsTable, proxyFlowsTable
+	return table, targetEndpointsTable, targetTable, productsTable, appsTable, appCredsTable, proxyFlowsTable
 }
 
 func syncDBOptions(args SyncArgs, dbURL string) dbConnOptions {
@@ -87,7 +90,7 @@ func collectProxyEndpointsIfNeeded(cfg ApigeeConfig, selection SyncSelection, pr
 	return endpoints, nil
 }
 
-func syncProxyEndpointsIfRequested(ctx context.Context, pool *pgxpool.Pool, selection SyncSelection, table, proxyFlowsTable string, endpoints []apigee.ProxyEndpointRecord) error {
+func syncProxyEndpointsIfRequested(ctx context.Context, pool *pgxpool.Pool, selection SyncSelection, table, targetEndpointsTable, proxyFlowsTable string, endpoints []apigee.ProxyEndpointRecord) error {
 	if !selection.needsProxyEndpoints() {
 		return nil
 	}
@@ -96,6 +99,10 @@ func syncProxyEndpointsIfRequested(ctx context.Context, pool *pgxpool.Pool, sele
 			return fmt.Errorf("sync proxy endpoints to PostgreSQL: %w", err)
 		}
 		fmt.Printf("Updated %d proxy endpoint(s) in %s\n", len(endpoints), table)
+		if err := syncTargetEndpoints(ctx, pool, targetEndpointsTable, endpoints); err != nil {
+			return fmt.Errorf("sync target endpoints to PostgreSQL: %w", err)
+		}
+		fmt.Printf("Updated target endpoint details in %s\n", targetEndpointsTable)
 		if err := syncProxyFlowSteps(ctx, pool, proxyFlowsTable, endpoints); err != nil {
 			return fmt.Errorf("sync proxy endpoint flow steps to PostgreSQL: %w", err)
 		}
@@ -213,6 +220,39 @@ func syncProxyFlowSteps(ctx context.Context, pool *pgxpool.Pool, table string, e
 			postResp := normalizeStringSlice(ep.FlowSteps.PostFlowResponse)
 			if _, err := tx.Exec(ctx, insertSQL, ep.Proxy, ep.Endpoint, preReq, preResp, postReq, postResp, now); err != nil {
 				return fmt.Errorf("insert proxy flow steps %s/%s: %w", ep.Proxy, ep.Endpoint, err)
+			}
+		}
+		return nil
+	})
+}
+
+func syncTargetEndpoints(ctx context.Context, pool *pgxpool.Pool, table string, endpoints []apigee.ProxyEndpointRecord) error {
+	return withTx(ctx, pool, table, func(ctx context.Context, tx pgx.Tx, quotedTable string) error {
+		if _, err := tx.Exec(ctx, deleteFromPrefix+quotedTable); err != nil {
+			return fmt.Errorf(clearTableFmt, quotedTable, err)
+		}
+
+		insertSQL := fmt.Sprintf(
+			"INSERT INTO %s (proxy_name, endpoint_name, target_endpoint_name, target_url, load_balancer_servers, properties, success_codes, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+			quotedTable,
+		)
+		snapshot := time.Now().UTC()
+		for _, ep := range endpoints {
+			for _, target := range ep.TargetEndpoints {
+				props := target.Properties
+				if props == nil {
+					props = map[string]string{}
+				}
+				propsJSON, err := json.Marshal(props)
+				if err != nil {
+					return fmt.Errorf("marshal target endpoint properties %s/%s/%s: %w", ep.Proxy, ep.Endpoint, target.Name, err)
+				}
+				servers := normalizeStringSlice(target.LoadBalancer)
+				url := strings.TrimSpace(target.URL)
+				success := strings.TrimSpace(target.SuccessCodes)
+				if _, err := tx.Exec(ctx, insertSQL, ep.Proxy, ep.Endpoint, target.Name, url, servers, propsJSON, success, snapshot); err != nil {
+					return fmt.Errorf("insert target endpoint %s/%s/%s: %w", ep.Proxy, ep.Endpoint, target.Name, err)
+				}
 			}
 		}
 		return nil

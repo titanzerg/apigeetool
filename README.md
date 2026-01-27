@@ -65,6 +65,7 @@ go run . \
 | `-db-url` | ใส่ PostgreSQL connection URL เพื่อใช้ทั้ง `-sync` และ `-findproxy` (default อ่านจาก `APIGEE_SYNC_DB_URL` หรือ `DATABASE_URL`) |
 | `-db-ssl-rootcert` / `-db-ssl-cert` / `-db-ssl-key` | ตั้งค่าไฟล์ TLS สำหรับเชื่อมต่อ DB (ใช้ร่วมทั้ง `-sync` และ `-findproxy`) default อ่านจากตัวแปร `APIGEE_SYNC_DB_SSL_*` |
 | `-endpoints-table` | ชื่อตาราง proxy endpoints ใน Postgres ใช้ร่วมทั้ง `-sync` และ `-findproxy` (default `apigee.apigee_proxy_endpoints`) |
+| `-target-endpoints-table` | ชื่อตาราง target endpoint details ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_target_endpoints`) |
 | `-targets-table` | ชื่อตาราง target servers ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_target_servers`) |
 | `-products-table` | ชื่อตาราง API products ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_api_products`) |
 | `-apps-table` | ชื่อตาราง apps ใน Postgres สำหรับโหมด `-sync` (default `apigee.apigee_apps`) |
@@ -85,13 +86,14 @@ go run . -sync -org my-org -token "$APIGEE_TOKEN" -db-url postgres://...
 เมื่อซิงก์ทั้งหมด (`-sync` หรือ `-sync=all`) คำสั่งจะ
 
 1. ไล่เรียก proxy ทุกตัวในองค์กร
-2. ดึง revision ล่าสุดและอ่านค่า BasePath พร้อม TargetEndpoint servers, จำนวน flows, และ environment ที่ deploy ของ ProxyEndpoint ทุกไฟล์
+2. ดึง revision ล่าสุดและอ่านค่า BasePath พร้อม TargetEndpoint servers, TargetEndpoint details (URL/LoadBalancer/Properties), จำนวน flows, และ environment ที่ deploy ของ ProxyEndpoint ทุกไฟล์
 3. ล้างแถวทั้งหมดในตารางเป้าหมาย
 4. ใส่ข้อมูลล่าสุด (proxy, endpoint, revision, base path, target servers, environments, flow count, updated_at) กลับลงไปใหม่ภายในการทำธุรกรรมเดียว
 5. ดึงข้อมูล target server ที่อ้างอิงในแต่ละ environment แล้วบันทึกลง table เป้าหมายสำหรับ target server แยกต่างหาก
 6. ดึงข้อมูล API product ทั้งหมดแล้วบันทึกลงตาราง API products
 7. ดึงข้อมูล apps พร้อม credentials แล้วบันทึกลงตาราง apps + app credentials
-8. ดึงข้อมูล pre/post flow steps ของ ProxyEndpoint แล้วบันทึกลงตาราง proxy endpoint flows
+8. ดึงข้อมูล TargetEndpoint details แล้วบันทึกลงตาราง target endpoints
+9. ดึงข้อมูล pre/post flow steps ของ ProxyEndpoint แล้วบันทึกลงตาราง proxy endpoint flows
 
 > ระบบจะบังคับ `sslmode=require` อัตโนมัติ และจะเติมค่า `sslrootcert`, `sslcert`, `sslkey` จาก flag/ตัวแปรสภาพแวดล้อมที่ตั้งไว้ เพื่อให้เชื่อมต่อผ่าน TLS โดยใช้ไฟล์ `.pem` ที่คุณเตรียมไว้
 
@@ -121,6 +123,18 @@ CREATE TABLE apigee.apigee_proxy_endpoints (
   flow_count integer NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (proxy_name, endpoint_name)
+);
+
+CREATE TABLE apigee.apigee_target_endpoints (
+  proxy_name text NOT NULL,
+  endpoint_name text NOT NULL,
+  target_endpoint_name text NOT NULL,
+  target_url text NULL,
+  load_balancer_servers text[] NOT NULL DEFAULT '{}',
+  properties jsonb NOT NULL DEFAULT '{}'::jsonb,
+  success_codes text NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (proxy_name, endpoint_name, target_endpoint_name)
 );
 
 CREATE TABLE apigee.apigee_proxy_endpoint_flows (
@@ -173,6 +187,14 @@ CREATE TABLE apigee.apigee_app_credentials (
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (app_id, consumer_key)
 );
+```
+
+ตัวอย่าง query หา proxy ที่ยังไม่ได้ตั้งค่า `success.codes` ใน `<HTTPTargetConnection><Properties>`
+
+```sql
+SELECT proxy_name, endpoint_name, target_endpoint_name
+FROM apigee.apigee_target_endpoints
+WHERE success_codes IS NULL OR success_codes = '';
 ```
 
 ต้องให้สิทธิ์บัญชีที่ใช้เชื่อมต่อสามารถ `DELETE` + `INSERT` กับตารางดังกล่าว

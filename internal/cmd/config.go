@@ -13,17 +13,18 @@ type ApigeeConfig struct {
 }
 
 type SyncArgs struct {
-	Selection           SyncSelection
-	DBURL               string
-	EndpointsTable      string
-	TargetTable         string
-	ProductsTable       string
-	AppsTable           string
-	AppCredentialsTable string
-	ProxyFlowsTable     string
-	SSLRoot             string
-	SSLCert             string
-	SSLKey              string
+	Selection            SyncSelection
+	DBURL                string
+	EndpointsTable       string
+	TargetEndpointsTable string
+	TargetTable          string
+	ProductsTable        string
+	AppsTable            string
+	AppCredentialsTable  string
+	ProxyFlowsTable      string
+	SSLRoot              string
+	SSLCert              string
+	SSLKey               string
 }
 
 type GenerateArgs struct {
