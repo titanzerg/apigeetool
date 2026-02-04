@@ -3,5 +3,6 @@
 *.sh
 *.yaml
 .env
+.env.*
 certs/
 downloaded-proxy-endpoints/

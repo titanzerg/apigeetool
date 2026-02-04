@@ -4,16 +4,19 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"apigee/internal/proxyxml"
@@ -101,8 +104,13 @@ type Client struct {
 	host       string
 	org        string
 	token      string
+	tokenMu    sync.Mutex
+	tokenFn    TokenSupplier
 	httpClient *http.Client
 }
+
+// TokenSupplier returns a fresh bearer token.
+type TokenSupplier func() (string, error)
 
 // NewClient builds a Client with default configuration.
 func NewClient(host, org, token string) *Client {
@@ -114,6 +122,7 @@ func NewClient(host, org, token string) *Client {
 		host:       host,
 		org:        strings.TrimSpace(org),
 		token:      strings.TrimSpace(token),
+		tokenFn:    tokenSupplierFromEnv(),
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -410,14 +419,7 @@ func (c *Client) fetchProxyBundle(proxy string, revision int) ([]byte, error) {
 		revision,
 	)
 
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", bearerPrefix+c.token)
-	req.Header.Set("Accept", "application/octet-stream")
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doRequestWithAccept(endpoint, "application/octet-stream")
 	if err != nil {
 		return nil, err
 	}
@@ -435,23 +437,79 @@ func (c *Client) fetchProxyBundle(proxy string, revision int) ([]byte, error) {
 }
 
 func (c *Client) doRequest(endpoint string) (*http.Response, error) {
+	return c.doRequestWithAccept(endpoint, "application/json")
+}
+
+func (c *Client) doRequestWithAccept(endpoint, accept string) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", bearerPrefix+c.token)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
+	if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && c.tokenFn != nil {
+		resp.Body.Close()
+		if err := c.refreshToken(); err != nil {
+			return nil, fmt.Errorf("refresh token: %w", err)
+		}
+		req, err = http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", bearerPrefix+c.token)
+		req.Header.Set("Accept", accept)
+		resp, err = c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		body := extractError(resp)
 		return nil, fmt.Errorf("apigee request failed: %s", body)
 	}
 	return resp, nil
+}
+
+func (c *Client) refreshToken() error {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	if c.tokenFn == nil {
+		return errors.New("no token refresh command configured")
+	}
+	token, err := c.tokenFn()
+	if err != nil {
+		return err
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("token refresh returned empty token")
+	}
+	c.token = token
+	return nil
+}
+
+func tokenSupplierFromEnv() TokenSupplier {
+	command := strings.TrimSpace(os.Getenv("APIGEE_TOKEN_COMMAND"))
+	if command == "" {
+		command = strings.TrimSpace(os.Getenv("APIGEE_TOKEN_CMD"))
+	}
+	if command == "" {
+		return nil
+	}
+	return func() (string, error) {
+		out, err := exec.Command("sh", "-c", command).Output()
+		if err != nil {
+			return "", err
+		}
+		return string(out), nil
+	}
 }
 
 func extractError(resp *http.Response) string {

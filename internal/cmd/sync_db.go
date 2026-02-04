@@ -77,6 +77,9 @@ func collectProxyEndpointsIfNeeded(cfg ApigeeConfig, selection SyncSelection, pr
 	if !selection.needsProxyEndpoints() {
 		return nil, nil
 	}
+	if selection.TargetServers && !selection.ProxyEndpoints {
+		return nil, nil
+	}
 	endpoints, err := apigee.CollectProxyEndpoints(apigee.CollectProxyEndpointsOptions{
 		Host:     cfg.Host,
 		Org:      cfg.Org,

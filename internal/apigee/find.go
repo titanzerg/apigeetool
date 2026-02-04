@@ -273,6 +273,12 @@ func CollectTargetServers(opts CollectTargetServersOptions) ([]TargetServerRecor
 	}
 
 	envs := collectTargetServerEnvs(opts.Endpoints)
+	if len(envs) == 0 {
+		envs, err = client.ListEnvironments()
+		if err != nil {
+			return nil, err
+		}
+	}
 	envTargets, total, err := listTargetServersByEnv(client, envs, opts.Progress)
 	if err != nil {
 		return nil, err

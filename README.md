@@ -83,6 +83,8 @@ go run . -sync -org my-org -token "$APIGEE_TOKEN" -db-url postgres://...
 
 ไม่ระบุค่าถัดจาก `-sync` จะซิงก์ทั้ง proxy endpoints, target server, API product และ apps (เทียบเท่า `-sync=all`). ถ้าต้องการเฉพาะบางอย่างให้ระบุชื่อตามนี้ เช่น `-sync=apiproxy`, `-sync=target_server`, `-sync=apps` หรือรวมหลายรายการแบบ `-sync=apiproxy,api_product`
 
+หมายเหตุ: ถ้าสั่ง `-sync=target_server` อย่างเดียว ระบบจะไม่สแกน proxy endpoints และจะดึง target servers จากทุก environment โดยตรง (ผ่านการ list environments)
+
 เมื่อซิงก์ทั้งหมด (`-sync` หรือ `-sync=all`) คำสั่งจะ
 
 1. ไล่เรียก proxy ทุกตัวในองค์กร
